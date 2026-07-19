@@ -1,0 +1,8 @@
+[project]
+name = "jarvis-alpha"
+version = "0.1.0"
+description = "Private, loopback-only local JARVIS text assistant alpha"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

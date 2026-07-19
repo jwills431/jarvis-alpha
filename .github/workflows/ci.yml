@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run Python tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Run browser-core tests
+        run: node tests/test_core.js
+      - name: Compile Python sources
+        run: python3 -m py_compile jarvis/*.py
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh benchmark/run.sh

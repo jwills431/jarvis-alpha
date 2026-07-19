@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>JARVIS Alpha</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <header><div><h1>JARVIS</h1><p>Local conversation alpha · private memory stays on this Mac</p></div><div class="header-actions"><button id="auto-memory-toggle" type="button" disabled aria-pressed="true">Auto memory on</button><button id="learn-toggle" type="button" disabled aria-pressed="false">Learn mode</button><button id="speech-settings-toggle" type="button" disabled aria-haspopup="dialog">Speech</button><button id="memory-toggle" type="button" disabled aria-haspopup="dialog">Memory</button><span id="status">Checking…</span></div></header>
+    <section id="messages" aria-live="polite"><article class="assistant">Ready when the local model is online.</article></section>
+    <form id="chat"><label for="prompt">Message</label><textarea id="prompt" maxlength="8000" rows="3" required aria-describedby="chat-hint voice-hint conversation-hint speech-hint auto-memory-hint learn-hint"></textarea><p id="chat-hint" aria-live="polite">Enter to send · Shift+Enter for a new line</p><p id="voice-hint" aria-live="polite">Hold the microphone button while speaking. Recognized speech is submitted automatically.</p><p id="conversation-hint" aria-live="polite">Conversation mode is off. When enabled, say “Goodbye, JARVIS” to close the microphone.</p><p id="speech-hint" aria-live="polite">JARVIS streams each reply using the local Daniel voice.</p><p id="auto-memory-hint" aria-live="polite">Automatic local memory is checking durable user facts only.</p><p id="learn-hint" aria-live="polite">Learn mode is off. Turn it on before a guided get-to-know-you conversation.</p><div id="memory-notice" hidden role="status" aria-live="polite"><span id="memory-notice-text"></span><button id="memory-notice-undo" type="button">Undo</button></div><div><button id="voice" type="button" disabled aria-pressed="false">Hold to talk</button><button id="conversation" type="button" disabled aria-pressed="false">Conversation mode</button><button id="speech-toggle" type="button" disabled aria-pressed="true">Voice on</button><button id="stop-speech" type="button" disabled>Stop speaking</button><button id="copy-chat" type="button">Copy chat</button><button id="clear" type="button">Clear</button><button id="send" type="submit">Send</button></div></form>
+  </main>
+  <div id="memory-backdrop" hidden>
+    <section id="memory-panel" role="dialog" aria-modal="true" aria-labelledby="memory-title">
+      <header><div><h2 id="memory-title">JARVIS Memory</h2><p>Saved facts are local and reviewable. Audio and ordinary chat remain ephemeral.</p></div><button id="memory-close" type="button" aria-label="Close memory">Close</button></header>
+      <p id="memory-status" aria-live="polite">Loading local memories…</p>
+      <form id="memory-form">
+        <input id="memory-id" type="hidden">
+        <label for="memory-category" class="visible-label">Category</label>
+        <select id="memory-category" required>
+          <option value="general">General</option>
+          <option value="preference">Preference</option>
+          <option value="people">People</option>
+          <option value="project">Project / canon</option>
+          <option value="environment">Environment / devices</option>
+          <option value="terminology">Terminology</option>
+        </select>
+        <label for="memory-text" class="visible-label">Memory</label>
+        <textarea id="memory-text" maxlength="1000" rows="3" required placeholder="A fact or preference you explicitly want JARVIS to retain"></textarea>
+        <p>Do not store passwords, tokens, financial secrets, machine serial numbers, or other credentials.</p>
+        <div><button id="memory-cancel" type="button" hidden>Cancel edit</button><button id="memory-save" type="submit">Save memory</button></div>
+      </form>
+      <section id="memory-candidates-section" hidden>
+        <h3>Needs review</h3>
+        <p class="memory-help">Uncertain or conflicting items never enter JARVIS’s context until you approve them.</p>
+        <div id="memory-candidates" aria-live="polite"></div>
+      </section>
+      <h3 id="saved-memory-title">Saved memories</h3>
+      <div id="memory-list" aria-live="polite"></div>
+    </section>
+  </div>
+  <div id="speech-settings-backdrop" hidden>
+    <section id="speech-settings-panel" role="dialog" aria-modal="true" aria-labelledby="speech-settings-title">
+      <header><div><h2 id="speech-settings-title">Local speech settings</h2><p>Choose from English voices already installed on this Mac. No voice is downloaded.</p></div><button id="speech-settings-close" type="button" aria-label="Close speech settings">Close</button></header>
+      <p id="speech-settings-status" aria-live="polite">Loading installed voices…</p>
+      <form id="speech-settings-form">
+        <label for="speech-voice" class="visible-label">Voice</label>
+        <select id="speech-voice" required></select>
+        <label for="speech-rate" class="visible-label">Speaking rate (words per minute)</label>
+        <input id="speech-rate" type="number" min="120" max="350" step="5" required inputmode="numeric">
+        <p>These preferences stay in this browser on the loopback JARVIS origin. They do not change macOS voice settings.</p>
+        <div><button id="speech-defaults" type="button">Use defaults</button><button id="speech-preview" type="button">Preview</button><button id="speech-settings-save" type="submit">Save speech settings</button></div>
+      </form>
+    </section>
+  </div>
+  <script src="/core.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a reproducible JARVIS Alpha defect using synthetic data.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, private prompts, memory contents, personal information, or machine identifiers.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What happened?
+      description: Describe the observed and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction
+      description: Provide the smallest reproduction using harmless synthetic data.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Area
+      options:
+        - Text chat
+        - Speech input
+        - Speech output
+        - Conversation mode
+        - Memory
+        - Runtime or startup
+        - Security or privacy
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: revision
+    attributes:
+      label: Revision and environment
+      description: Include the Git revision and non-identifying macOS/runtime versions. Never include a machine serial number.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, personal data, private prompts, local absolute paths, and machine identifiers.
+          required: true
