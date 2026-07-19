@@ -17,6 +17,10 @@ The current launcher expects these ignored paths unless an environment override 
 | whisper.cpp CLI | `runtime/whisper.cpp/build/bin/whisper-cli` | v1.9.1, commit `f049fff` |
 | Whisper model | `models/whisper/ggml-base.en.bin` | `base.en` |
 | Silero VAD model | `models/whisper/ggml-silero-v6.2.0.bin` | v6.2.0 |
+| Piper binary (optional) | `runtime/piper/piper` | rhasspy/piper `2023.11.14-2`, macOS x64 |
+| Piper voice (optional) | `models/piper/en_GB-alan-medium.onnx` (+ `.onnx.json`) | `rhasspy/piper-voices` |
+
+The Piper rows are required only for the optional natural neural voice, enabled by setting `tts_engine` to `piper`; step-by-step download and verification commands are in `docs/TTS.md`. The default `say` engine needs no downloads.
 
 See `THIRD_PARTY.md`, `docs/BENCHMARK.md`, and `docs/VOICE.md` for upstream projects, licenses, selected hardware settings, and recorded checksums. Obtain model files only from their documented upstream publishers and verify their checksums before use.
 

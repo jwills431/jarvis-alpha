@@ -77,3 +77,4 @@ Automatic and explicit local memory is implemented and awaiting the short user-a
 
 - Software context/recovery acceptance is complete for bounded text/API operation.
 - Extended spoken-context, physical sleep/wake, controlled in-flight interruption, and bounded thermal-pressure/latency acceptance are complete.
+- The optional local neural voice engine (Piper) is implemented and covered by source-only tests (engine selection, rate-to-length-scale mapping, standard-input synthesis, and rendered-audio playback). On-device audio acceptance on the target Mac — natural-voice quality, per-phrase playback latency, and interrupt/stop behavior through `afplay` — remains pending. The default built-in `say` engine is unchanged.

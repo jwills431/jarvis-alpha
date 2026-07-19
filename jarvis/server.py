@@ -324,12 +324,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "speech_unavailable"})
             return
         try:
-            voices = list(speech.english_voices())
+            voices = list(speech.available_voices(self.config))
             if not voices:
-                raise speech.SpeechError("no English voices are installed")
+                raise speech.SpeechError("no voices are available")
             self._json(HTTPStatus.OK, {
                 "voices": voices,
-                "default_voice": self.config.tts_voice,
+                "default_voice": speech.default_voice(self.config),
                 "default_rate": self.config.tts_rate,
                 "minimum_rate": speech.SPEECH_RATE_MIN,
                 "maximum_rate": speech.SPEECH_RATE_MAX,

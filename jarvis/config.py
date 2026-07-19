@@ -26,10 +26,14 @@ class Config:
     transcription_timeout_seconds: int = 45
     max_audio_bytes: int = 1_000_000
     tts_enabled: bool = True
+    tts_engine: str = "say"
     tts_voice: str = "Daniel"
     tts_rate: int = 190
     tts_timeout_seconds: int = 180
     max_tts_chars: int = 4_000
+    piper_binary: str = "runtime/piper/piper"
+    piper_voice: str = "models/piper/en_GB-alan-medium.onnx"
+    piper_voice_name: str = "JARVIS (British)"
     request_timeout_seconds: int = 180
     max_request_bytes: int = 65_536
     max_history_messages: int = 20
@@ -93,8 +97,12 @@ class Config:
             raise ValueError("whisper_vad_min_speech_ms must be between 100 and 2000")
         if not 32_044 <= self.max_audio_bytes <= 10_000_000:
             raise ValueError("max_audio_bytes must be between 32044 and 10000000")
+        if self.tts_engine not in ("say", "piper"):
+            raise ValueError("tts_engine must be 'say' or 'piper'")
         if not re.fullmatch(r"[^\x00-\x1f\x7f]{1,80}", self.tts_voice) or self.tts_voice.startswith("-"):
             raise ValueError("tts_voice is invalid")
+        if not re.fullmatch(r"[^\x00-\x1f\x7f]{1,80}", self.piper_voice_name) or self.piper_voice_name.startswith("-"):
+            raise ValueError("piper_voice_name is invalid")
         if not 120 <= self.tts_rate <= 350:
             raise ValueError("tts_rate must be between 120 and 350")
         if not 5 <= self.tts_timeout_seconds <= 600:

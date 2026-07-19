@@ -15,7 +15,17 @@ from jarvis.config import Config, load_config
 from jarvis.backend import BackendError, count_unsupported_script_characters, sanitize_sse_line, stream_chat
 from jarvis.server import SYSTEM_PROMPT, JarvisServer, exact_spelling_recall, extract_authoritative_spellings, is_source_bound_request, prepare_model_messages, validate_messages
 from jarvis import speech
-from jarvis.speech import SpeechError, parse_installed_voices, prepare_speech_text, resolve_speech_options, validate_text
+from jarvis.speech import (
+    SpeechError,
+    available_voices,
+    default_voice,
+    length_scale_for_rate,
+    parse_installed_voices,
+    piper_command,
+    prepare_speech_text,
+    resolve_speech_options,
+    validate_text,
+)
 from jarvis.transcription import NoSpeechDetected, TranscriptionError, TranscriptionProcessError, TranscriptionTimeout, transcribe, validate_speech_energy, validate_transcript, validate_wav
 
 
@@ -81,6 +91,17 @@ class ConfigTests(unittest.TestCase):
     def test_rejects_extreme_tts_rate(self):
         with self.assertRaises(ValueError):
             Config(tts_rate=500).validate()
+
+    def test_defaults_to_say_engine(self):
+        self.assertEqual(Config().validate().tts_engine, "say")
+
+    def test_rejects_unknown_tts_engine(self):
+        with self.assertRaises(ValueError):
+            Config(tts_engine="cloud").validate()
+
+    def test_rejects_option_like_piper_voice_name(self):
+        with self.assertRaises(ValueError):
+            Config(piper_voice_name="--bad-option").validate()
 
     def test_rejects_message_limit_above_history_limit(self):
         with self.assertRaises(ValueError):
@@ -360,6 +381,78 @@ class SpeechTests(unittest.TestCase):
             with self.assertRaises(SpeechError):
                 speech.speak(Config(tts_timeout_seconds=5), "bounded speech")
         self.assertTrue(process.terminated)
+
+    def test_piper_engine_reports_configured_voice(self):
+        config = Config(tts_engine="piper", piper_voice="models/piper/en_GB-alan-medium.onnx", piper_voice_name="JARVIS (British)")
+        self.assertEqual(default_voice(config), "JARVIS (British)")
+        self.assertEqual(available_voices(config), ({"name": "JARVIS (British)", "locale": "en_GB"},))
+
+    def test_piper_speech_options_validate_against_configured_voice(self):
+        config = Config(tts_engine="piper", piper_voice_name="JARVIS (British)")
+        self.assertEqual(resolve_speech_options(config, "JARVIS (British)", 205), ("JARVIS (British)", 205))
+        with self.assertRaises(SpeechError):
+            resolve_speech_options(config, "Daniel", 205)
+
+    def test_length_scale_maps_and_clamps_rate(self):
+        self.assertEqual(length_scale_for_rate(190), 1.0)
+        self.assertLess(length_scale_for_rate(350), 1.0)
+        self.assertGreater(length_scale_for_rate(120), 1.0)
+        self.assertGreaterEqual(length_scale_for_rate(350), speech.PIPER_LENGTH_SCALE_MIN)
+        self.assertLessEqual(length_scale_for_rate(120), speech.PIPER_LENGTH_SCALE_MAX)
+
+    def test_piper_command_never_contains_the_text(self):
+        command = piper_command(Config(tts_engine="piper"), "/tmp/out.wav", 1.0)
+        self.assertIn("--model", command)
+        self.assertIn("--output_file", command)
+        self.assertIn("--length_scale", command)
+        self.assertNotIn("private reply text", command)
+
+    def test_piper_speech_uses_standard_input_and_plays_rendered_audio(self):
+        commands = []
+
+        class Sink:
+            def __init__(self):
+                self.data = b""
+
+            def write(self, value):
+                self.data += value
+
+            def close(self):
+                pass
+
+        class FakeProcess:
+            def __init__(self, needs_stdin):
+                self.stdin = Sink() if needs_stdin else None
+                self.returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                self.returncode = 0
+                return 0
+
+            def terminate(self):
+                self.returncode = -15
+
+            def kill(self):
+                self.returncode = -9
+
+        def fake_popen(command, **kwargs):
+            process = FakeProcess(kwargs.get("stdin") is subprocess.PIPE)
+            commands.append((command, process))
+            return process
+
+        config = Config(tts_engine="piper")
+        with patch("jarvis.speech.runtime_ready", return_value=True), patch("jarvis.speech.subprocess.Popen", side_effect=fake_popen):
+            speech.speak(config, "private reply text")
+        synth_command, synth_process = commands[0]
+        play_command, _ = commands[1]
+        self.assertIn("--model", synth_command)
+        self.assertNotIn("private reply text", synth_command)
+        self.assertEqual(synth_process.stdin.data, b"private reply text")
+        self.assertEqual(play_command[0], str(speech.AFPLAY))
+        self.assertNotIn("private reply text", play_command)
 
 
 class StreamSanitizationTests(unittest.TestCase):
