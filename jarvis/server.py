@@ -598,7 +598,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        speech.stop()
+        # Releases the resident Piper worker along with any current speech.
+        speech.shutdown()
         server.server_close()
 
 

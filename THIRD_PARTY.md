@@ -9,3 +9,11 @@
 - Apple Accelerate and Metal frameworks supplied by macOS.
 
 Runtime source, build products, and model weights are intentionally ignored by this project and retain their upstream licenses.
+
+## piper-tts (optional)
+
+- Source: [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), installed from PyPI as `piper-tts`.
+- License: **GPL-3.0**.
+- Used only when a Piper voice is selected. Installed into the ignored `runtime/piper-venv/` and invoked as a separate process; it is not linked into or redistributed with JARVIS.
+- Voice models are downloaded separately and carry their own upstream licenses.
+- The archived MIT-licensed `rhasspy/piper` macOS binaries are unusable: they omit required libraries (upstream issue 404).

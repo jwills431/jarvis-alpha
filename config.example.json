@@ -19,7 +19,7 @@
   "tts_rate": 190,
   "tts_timeout_seconds": 180,
   "max_tts_chars": 4000,
-  "piper_binary": "runtime/piper/piper",
+  "piper_python": "runtime/piper-venv/bin/python3",
   "piper_voice": "models/piper/en_GB-alan-medium.onnx",
   "piper_voice_name": "JARVIS (British)",
   "request_timeout_seconds": 180,

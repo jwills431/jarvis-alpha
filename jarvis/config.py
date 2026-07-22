@@ -31,7 +31,7 @@ class Config:
     tts_rate: int = 190
     tts_timeout_seconds: int = 180
     max_tts_chars: int = 4_000
-    piper_binary: str = "runtime/piper/piper"
+    piper_python: str = "runtime/piper-venv/bin/python3"
     piper_voice: str = "models/piper/en_GB-alan-medium.onnx"
     piper_voice_name: str = "JARVIS (British)"
     request_timeout_seconds: int = 180
@@ -99,6 +99,12 @@ class Config:
             raise ValueError("max_audio_bytes must be between 32044 and 10000000")
         if self.tts_engine not in ("say", "piper"):
             raise ValueError("tts_engine must be 'say' or 'piper'")
+        piper_python = Path(self.piper_python)
+        if piper_python.is_absolute() or ".." in piper_python.parts:
+            raise ValueError("piper_python must be a relative path inside the project")
+        piper_voice = Path(self.piper_voice)
+        if piper_voice.is_absolute() or ".." in piper_voice.parts:
+            raise ValueError("piper_voice must be a relative path inside the project")
         if not re.fullmatch(r"[^\x00-\x1f\x7f]{1,80}", self.tts_voice) or self.tts_voice.startswith("-"):
             raise ValueError("tts_voice is invalid")
         if not re.fullmatch(r"[^\x00-\x1f\x7f]{1,80}", self.piper_voice_name) or self.piper_voice_name.startswith("-"):

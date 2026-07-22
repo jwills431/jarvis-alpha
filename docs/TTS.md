@@ -7,6 +7,24 @@
 - Complete sentences are preferred; unusually long sentences are split near punctuation or whitespace after about 220 characters.
 - The default voice is the installed macOS `Daniel` (`en_GB`) voice at 190 words per minute.
 - **Speech** lists English voices already installed on this Mac and accepts a bounded 120–350 WPM rate. The saved choice applies to subsequent spoken replies.
+
+## Voice precedence
+
+Configuration is authoritative. The `tts_voice`/`tts_rate` values in `config.local.json` are used unless this browser holds a saved override from the **Speech** panel.
+
+- A saved override is stored with the configured default it was chosen against.
+- Editing `tts_voice` or `tts_rate` in configuration invalidates that override; the new configured value takes effect on the next page load and the stale browser entry is removed.
+- Saving a selection that equals the configured default removes the override rather than pinning it, so future configuration changes continue to apply.
+- Selecting an override for a voice that is no longer installed also discards it.
+- Until the installed-voice list loads, the browser sends no voice at all and the server synthesizes with its configured voice. The client never names a voice that configuration did not choose.
+
+Configuration is read once at startup, so restart with `scripts/start.sh` after editing `config.local.json`. Confirm what the server resolved with:
+
+```sh
+curl -s http://127.0.0.1:8787/api/speech/options | python3 -m json.tool
+```
+
+`default_voice` must exactly match a `name` in the `voices` list. Voice names come from `/usr/bin/say -v '?'`, where Enhanced/Premium voices are listed with their suffix (for example `Jamie (Premium)`). If the configured name is not listed verbatim, it cannot be selected.
 - **Preview** speaks one fixed, non-private sentence using the currently selected controls. It is never triggered automatically.
 - **Voice on** toggles automatic speech. Muting also stops the current reply.
 - **Stop speaking** interrupts the current phrase and discards queued phrases without muting future replies.
@@ -16,69 +34,41 @@
 
 ## Speech engines
 
-Two local synthesis engines are selectable with `tts_engine`; both play on this Mac only and make no network calls.
+Two local synthesis engines are available; both play on this Mac only and make no network calls. The engine is a property of each voice rather than a global mode: installed macOS voices and a provisioned Piper voice appear together in the **Speech** panel, so they can be compared without a restart. `tts_engine` selects which one supplies the default voice.
 
 - `say` (default): the built-in macOS `/usr/bin/say`. Zero extra downloads. **Quick quality win:** install an Enhanced/Premium `en_GB` voice (System Settings → Accessibility → Spoken Content → System Voice → Manage Voices) and set `tts_voice` to it — far more natural than the compact `Daniel` voice, with no code change.
 - `piper`: a local neural engine ([Piper](https://github.com/rhasspy/piper)) for a natural, British JARVIS-style voice while staying fully offline. JARVIS pipes the reply text to Piper through standard input (never process arguments or a temporary text file), renders a temporary WAV under the OS temp directory, plays it with `/usr/bin/afplay`, and deletes it immediately.
 
 ### Enabling Piper
 
-Piper runs fully offline. Its binary and voices are downloaded artifacts that live under the same ignored `runtime/` and `models/` directories as the chat and Whisper runtimes; nothing here is committed. Run these from the repository root.
+Piper runs fully offline once installed. It lives in an isolated virtual environment under the ignored `runtime/` directory, with voices under `models/`; nothing here is committed.
 
-1. **Create the directories:**
+```sh
+scripts/setup_piper.sh          # or: scripts/setup_piper.sh low
+scripts/check_piper.sh --play
+```
 
-   ```sh
-   mkdir -p runtime/piper models/piper
-   ```
+`setup_piper.sh` creates `runtime/piper-venv`, installs `piper-tts`, verifies the package imports, and downloads the voice with its required `.onnx.json` sidecar. `check_piper.sh` renders a sample phrase the same way JARVIS does and reports the real-time factor. Neither changes configuration.
 
-2. **Download the Piper binary** for the Intel iMac Pro (macOS x86_64). Confirm the current asset on the [releases page](https://github.com/rhasspy/piper/releases); the Intel build is `piper_macos_x64.tar.gz`:
+Restart JARVIS afterwards. The Piper voice then appears in the **Speech** panel alongside the installed macOS voices, labelled `neural`, and can be selected without editing configuration or restarting again.
 
-   ```sh
-   curl -L -o /tmp/piper.tar.gz \
-     https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_macos_x64.tar.gz
-   tar -xzf /tmp/piper.tar.gz -C runtime/          # creates runtime/piper/piper and its libraries
-   chmod +x runtime/piper/piper
-   xattr -dr com.apple.quarantine runtime/piper    # only if macOS Gatekeeper blocks the unsigned binary
-   ```
+#### Why not the standalone binary
 
-3. **Download a British voice.** Both the model and its adjacent `.onnx.json` config are required — Piper loads the config from beside the model:
+The archived `rhasspy/piper` repository published macOS tarballs that omit the libraries their own binary links against, producing `Library not loaded: @rpath/libespeak-ng.1.dylib` on first synthesis ([upstream issue 404](https://github.com/rhasspy/piper/issues/404), never fixed before the repository was archived in October 2025). `libpiper_phonemize` is not packaged anywhere else, so the dependency cannot be satisfied without building from source. The `piper-tts` wheel from `OHF-Voice/piper1-gpl` bundles its libraries and espeak-ng data, which is why it is used instead.
 
-   ```sh
-   base=https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium
-   curl -L -o models/piper/en_GB-alan-medium.onnx      "$base/en_GB-alan-medium.onnx"
-   curl -L -o models/piper/en_GB-alan-medium.onnx.json "$base/en_GB-alan-medium.onnx.json"
-   ```
+#### One resident worker
 
-   Other calm British male options include `en_GB-northern_english_male-medium` and `en_GB-cori-high`. Browse them all at [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
+Loading the voice model costs roughly a second; synthesizing a sentence costs a fraction of that — measured on the target Mac, a 4.4-second utterance rendered in 0.17 seconds, a real-time factor of about 0.04. Spawning a fresh process per phrase therefore spent most of its time reloading a model it had just discarded, and because JARVIS does not begin rendering a phrase until the previous one finishes playing, that cost landed directly in the silence between spoken sentences.
 
-4. **Verify synthesis independently of JARVIS** (recommended):
+JARVIS keeps one Piper process resident with the model loaded and sends it one phrase per request. The worker starts lazily on the first Piper phrase, is replaced once if it dies, and is released when the foreground service stops. The gap between sentences becomes synthesis time rather than a repeated cold start.
 
-   ```sh
-   echo 'At your service.' | runtime/piper/piper \
-     --model models/piper/en_GB-alan-medium.onnx --output_file /tmp/jarvis-voice-test.wav
-   afplay /tmp/jarvis-voice-test.wav && rm /tmp/jarvis-voice-test.wav
-   ```
+#### Keeping reply text out of process arguments
 
-5. **Select the engine** in ignored `config.local.json` (copy it from `config.example.json` first if you do not have one):
+The `piper-tts` command line takes its text as a positional argument, which would expose reply text to any local process listing. JARVIS therefore calls `scripts/piper_synthesize.py` with the virtual environment's interpreter; that wrapper uses Piper's Python API and reads each utterance from standard input as one JSON request line. Arguments carry only the model path and the `--serve` flag. Responses report a status and, on failure, an exception type — never the utterance. This preserves the same guarantee the built-in `say` engine has.
 
-   ```json
-   {
-     "tts_engine": "piper",
-     "piper_binary": "runtime/piper/piper",
-     "piper_voice": "models/piper/en_GB-alan-medium.onnx",
-     "piper_voice_name": "JARVIS (British)"
-   }
-   ```
+### Engines evaluated and set aside
 
-6. **Start JARVIS** (`scripts/start.sh`) and confirm the voice is live:
-
-   ```sh
-   curl -s http://127.0.0.1:8787/api/health    # expect "tts":"ready"
-   ```
-
-   The Speech panel now lists `piper_voice_name`; the rate slider, mute, and stop controls work unchanged. The 120–350 WPM rate maps to Piper's length scale (the `tts_rate` baseline maps to a normal 1.0 scale; faster rates shorten it, slower rates lengthen it).
-
-If the binary or voice is missing, health reports `tts: unavailable`, the speech controls disable, and text plus push-to-talk keep working. Revert to the built-in voice at any time with `"tts_engine": "say"`; no Piper runtime is then required.
+- **Fish Audio / OpenAudio S1-mini** (zero-shot cloning, the voice at fish.audio): evaluated 2026-07 and not pursued on this machine. The open model is MIT-licensed and runs offline, but the vendor's own local-setup docs require a 12 GB CUDA GPU and Linux, list CPU-only as "not recommended," and note `--compile` is unsupported on macOS. Their entry-level recommended GPU (RTX 3060) reaches ~15x real-time; a 2017 Intel CPU with no usable GPU would be far slower — plausibly seconds to tens of seconds per sentence, versus Piper's measured ~0.17 s. It would erase the resident-worker latency gain. The linked "JARVIS" voice is also a zero-shot clone of a real actor's performance, carrying the same voice-likeness/right-of-publicity concern noted below. Revisit only if a CUDA GPU is added (the migration package's historical RTX 3060 eGPU path would suffice).
 
 ### Voice likeness and cloning
 
@@ -86,7 +76,7 @@ Piper voices are original synthetic voices. Cloning a specific real person's voi
 
 ## Privacy and security
 
-- Synthesis uses the built-in `/usr/bin/say`; there is no cloud TTS call or added dependency.
+- Synthesis uses the built-in `/usr/bin/say`, or a locally installed Piper binary when selected; there is no cloud TTS call in either case.
 - Reply text is sent to `say` through standard input, not command-line arguments or a temporary text file.
 - The browser calls only the loopback JARVIS endpoint.
 - Speech requests are limited to 4,000 characters and the process is capped at 180 seconds.
@@ -95,6 +85,8 @@ Piper voices are original synthetic voices. Cloning a specific real person's voi
 - A browser-selected rate must be an integer from 120 through 350 WPM.
 - Voice and rate preferences use this loopback origin's browser storage. They contain no conversation text and do not modify macOS settings.
 - Active speech is terminated when the foreground JARVIS service stops.
+- Piper renders to a temporary WAV under the OS temp directory and deletes it immediately, including when synthesis is interrupted.
+- A stop or a newer reply advances an internal speech generation. A phrase that finished rendering before that point is discarded rather than played, so an interrupted phrase is never spoken afterwards.
 
 ## Failure behavior
 
@@ -104,4 +96,4 @@ Exact written spelling and spoken pronunciation are separate. The built-in voice
 
 ## Rollback
 
-Set `tts_enabled` to `false` in local configuration. The health endpoint will mark speech unavailable, controls will disable, and text plus push-to-talk remain operational. **Use defaults** restores the configured `Daniel`/190 selection without changing configuration files. To revert the neural voice without disabling speech, set `"tts_engine": "say"`; the built-in voice resumes and no Piper runtime is required.
+Set `tts_enabled` to `false` in local configuration. The health endpoint will mark speech unavailable, controls will disable, and text plus push-to-talk remain operational. **Use defaults** restores the configured voice and rate without changing configuration files. To revert the neural voice without disabling speech, set `"tts_engine": "say"`; the built-in voice resumes and no Piper runtime is required.

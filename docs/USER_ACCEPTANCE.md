@@ -34,7 +34,7 @@ Status: ready for user-assisted listening acceptance. The controls and validatio
 2. Set a rate between 120 and 350 WPM, then use **Preview**.
 3. Save the selection and send a short typed question. Confirm both the preview and streamed reply use the chosen voice and approximate rate.
 4. Refresh the page and confirm the selection remains shown.
-5. Select **Use defaults**, save, and confirm the UI returns to `Daniel` at 190 WPM.
+5. Select **Use defaults**, save, and confirm the UI returns to the configured voice and rate and reports that this browser no longer overrides them.
 
 Pass criteria: no download or macOS settings prompt occurs; preview is user-triggered; text chat remains usable if preview fails; invalid or uninstalled settings are rejected by the server.
 

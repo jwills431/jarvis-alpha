@@ -84,8 +84,9 @@ let learnSavedCount = 0;
 let speechOptionsReady = false;
 let speechOptionsLoading = false;
 let speechOptions = null;
-let speechVoice = 'Daniel';
-let speechRate = 190;
+let speechOverridden = false;
+let speechVoice = null;
+let speechRate = null;
 
 promptEl.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -172,10 +173,14 @@ async function saveLearnAnswer(answer) {
 }
 
 function speechIdleMessage() {
+  if (typeof speechVoice !== 'string' || !Number.isInteger(speechRate)) {
+    return 'JARVIS streams every reply using the configured local voice.';
+  }
   return `JARVIS streams every reply using the local ${speechVoice} voice at ${speechRate} WPM.`;
 }
 
 function speechPayload(text, voice = speechVoice, rate = speechRate) {
+  if (typeof voice !== 'string' || !Number.isInteger(rate)) return {text};
   return {text, voice, rate};
 }
 
@@ -185,6 +190,14 @@ function storedSpeechSetting(key) {
 
 function storeSpeechSetting(key, value) {
   try { localStorage.setItem(key, String(value)); } catch { /* browser persistence is optional */ }
+}
+
+function removeSpeechSetting(key) {
+  try { localStorage.removeItem(key); } catch { /* browser persistence is optional */ }
+}
+
+function clearStoredSpeechOverride() {
+  for (const key of ['voice', 'voiceDefault', 'rate', 'rateDefault']) removeSpeechSetting(`jarvis.speech.${key}`);
 }
 
 function setAutoMemory(enabled, message = '') {
@@ -271,22 +284,37 @@ async function loadSpeechOptions() {
     const response = await fetch('/api/speech/options', {cache: 'no-store'});
     const payload = await response.json();
     if (!response.ok || !Array.isArray(payload.voices) || !payload.voices.length) throw new Error('speech options unavailable');
-    const voices = payload.voices.filter((item) => item && typeof item.name === 'string' && typeof item.locale === 'string');
+    const voices = payload.voices
+      .filter((item) => item && typeof item.name === 'string' && typeof item.locale === 'string')
+      .map((item) => ({name: item.name, locale: item.locale, engine: item.engine === 'piper' ? 'piper' : 'say'}));
     if (!voices.length) throw new Error('speech options unavailable');
     const minimumRate = Number.isInteger(payload.minimum_rate) ? payload.minimum_rate : 120;
     const maximumRate = Number.isInteger(payload.maximum_rate) ? payload.maximum_rate : 350;
     const defaultRate = Number.isInteger(payload.default_rate) ? payload.default_rate : 190;
-    const defaultVoice = voices.some((item) => item.name === payload.default_voice) ? payload.default_voice : voices[0].name;
-    speechOptions = {voices, minimumRate, maximumRate, defaultRate, defaultVoice};
-    const savedVoice = storedSpeechSetting('jarvis.speech.voice');
-    const savedRate = Number.parseInt(storedSpeechSetting('jarvis.speech.rate') || '', 10);
-    speechVoice = voices.some((item) => item.name === savedVoice) ? savedVoice : defaultVoice;
-    speechRate = Number.isInteger(savedRate) && savedRate >= minimumRate && savedRate <= maximumRate ? savedRate : defaultRate;
+    const selection = JarvisCore.resolveSpeechSelection(
+      {voices, minimumRate, maximumRate, defaultRate, defaultVoice: payload.default_voice},
+      {
+        voice: storedSpeechSetting('jarvis.speech.voice'),
+        voiceDefault: storedSpeechSetting('jarvis.speech.voiceDefault'),
+        rate: storedSpeechSetting('jarvis.speech.rate'),
+        rateDefault: storedSpeechSetting('jarvis.speech.rateDefault'),
+      },
+    );
+    // A stored override that no longer matches the configured default is
+    // discarded here so an edited config.local.json takes effect on reload.
+    if (selection.stale.length) clearStoredSpeechOverride();
+    speechOptions = {voices, minimumRate, maximumRate, defaultRate: selection.defaultRate, defaultVoice: selection.defaultVoice};
+    speechVoice = selection.voice;
+    speechRate = selection.rate;
+    speechOverridden = selection.overridden;
     speechVoiceEl.replaceChildren();
     for (const item of voices) {
       const option = document.createElement('option');
       option.value = item.name;
-      option.textContent = `${item.name} (${item.locale.replace('_', '-')})`;
+      // The engine is visible so a neural voice can be compared against a
+      // built-in one without guessing which is which.
+      const engine = item.engine === 'piper' ? 'neural' : 'built-in';
+      option.textContent = `${item.name} (${item.locale.replace('_', '-')}, ${engine})`;
       speechVoiceEl.appendChild(option);
     }
     speechVoiceEl.value = speechVoice;
@@ -294,7 +322,13 @@ async function loadSpeechOptions() {
     speechRateEl.max = String(maximumRate);
     speechRateEl.value = String(speechRate);
     speechOptionsReady = true;
-    speechSettingsStatusEl.textContent = `${voices.length} installed English voices are available.`;
+    const neural = voices.filter((item) => item.engine === 'piper').length;
+    const inventory = neural
+      ? `${voices.length} voices are available, including ${neural} neural.`
+      : `${voices.length} installed English voices are available.`;
+    speechSettingsStatusEl.textContent = speechOverridden
+      ? `${inventory} This browser overrides the configured voice.`
+      : `${inventory} Using the configured voice.`;
     if (speechReady && speechEnabled && !speechActive) speechHintEl.textContent = speechIdleMessage();
   } catch {
     speechOptionsReady = false;
@@ -1236,9 +1270,17 @@ speechSettingsFormEl.addEventListener('submit', (event) => {
   }
   speechVoice = selected.voice;
   speechRate = selected.rate;
-  storeSpeechSetting('jarvis.speech.voice', speechVoice);
-  storeSpeechSetting('jarvis.speech.rate', speechRate);
-  speechSettingsStatusEl.textContent = 'Speech settings saved in this browser.';
+  speechOverridden = speechVoice !== speechOptions.defaultVoice || speechRate !== speechOptions.defaultRate;
+  if (speechOverridden) {
+    storeSpeechSetting('jarvis.speech.voice', speechVoice);
+    storeSpeechSetting('jarvis.speech.voiceDefault', speechOptions.defaultVoice);
+    storeSpeechSetting('jarvis.speech.rate', speechRate);
+    storeSpeechSetting('jarvis.speech.rateDefault', speechOptions.defaultRate);
+    speechSettingsStatusEl.textContent = 'Speech settings saved in this browser. They override the configured voice until it changes.';
+  } else {
+    clearStoredSpeechOverride();
+    speechSettingsStatusEl.textContent = 'Configured defaults restored. This browser no longer overrides them.';
+  }
   speechHintEl.textContent = speechEnabled ? speechIdleMessage() : 'JARVIS voice is muted.';
   closeSpeechSettings();
 });

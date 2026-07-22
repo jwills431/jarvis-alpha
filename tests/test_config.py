@@ -17,6 +17,7 @@ from jarvis.server import SYSTEM_PROMPT, JarvisServer, exact_spelling_recall, ex
 from jarvis import speech
 from jarvis.speech import (
     SpeechError,
+    voice_engine,
     available_voices,
     default_voice,
     length_scale_for_rate,
@@ -284,16 +285,17 @@ class SpeechTests(unittest.TestCase):
             "malformed line\n"
         )
         self.assertEqual(parse_installed_voices(value), (
-            {"name": "Daniel", "locale": "en_GB"},
-            {"name": "Eddy (English (UK))", "locale": "en_GB"},
+            {"name": "Daniel", "locale": "en_GB", "engine": "say"},
+            {"name": "Eddy (English (UK))", "locale": "en_GB", "engine": "say"},
         ))
 
     def test_browser_speech_options_require_an_installed_english_voice_and_bounded_rate(self):
         voices = (
-            {"name": "Daniel", "locale": "en_GB"},
-            {"name": "Reed (English (UK))", "locale": "en_GB"},
+            {"name": "Daniel", "locale": "en_GB", "engine": "say"},
+            {"name": "Reed (English (UK))", "locale": "en_GB", "engine": "say"},
         )
-        with patch("jarvis.speech.installed_voices", return_value=voices):
+        with patch("jarvis.speech.installed_voices", return_value=voices), \
+             patch("jarvis.speech._say_runtime_ready", return_value=True):
             self.assertEqual(
                 resolve_speech_options(Config(), "Reed (English (UK))", 205),
                 ("Reed (English (UK))", 205),
@@ -382,16 +384,45 @@ class SpeechTests(unittest.TestCase):
                 speech.speak(Config(tts_timeout_seconds=5), "bounded speech")
         self.assertTrue(process.terminated)
 
-    def test_piper_engine_reports_configured_voice(self):
-        config = Config(tts_engine="piper", piper_voice="models/piper/en_GB-alan-medium.onnx", piper_voice_name="JARVIS (British)")
-        self.assertEqual(default_voice(config), "JARVIS (British)")
-        self.assertEqual(available_voices(config), ({"name": "JARVIS (British)", "locale": "en_GB"},))
+    def test_both_engines_are_offered_together_for_comparison(self):
+        # The engine is a property of the voice, so a neural voice and the
+        # built-in ones appear in one list and can be switched without a restart.
+        config = Config(tts_engine="say", piper_voice_name="JARVIS (British)")
+        say_voices = ({"name": "Daniel", "locale": "en_GB", "engine": "say"},)
+        with patch("jarvis.speech.english_voices", return_value=say_voices), \
+             patch("jarvis.speech._say_runtime_ready", return_value=True), \
+             patch("jarvis.speech._piper_runtime_ready", return_value=True):
+            voices = available_voices(config)
+            self.assertEqual([voice["name"] for voice in voices], ["Daniel", "JARVIS (British)"])
+            self.assertEqual(voice_engine(config, "Daniel"), "say")
+            self.assertEqual(voice_engine(config, "JARVIS (British)"), "piper")
+            # Either voice is selectable regardless of the configured default.
+            self.assertEqual(resolve_speech_options(config, "JARVIS (British)", 205), ("JARVIS (British)", 205))
+            self.assertEqual(resolve_speech_options(config, "Daniel", 205), ("Daniel", 205))
 
-    def test_piper_speech_options_validate_against_configured_voice(self):
+    def test_piper_voice_is_absent_until_its_runtime_is_installed(self):
         config = Config(tts_engine="piper", piper_voice_name="JARVIS (British)")
-        self.assertEqual(resolve_speech_options(config, "JARVIS (British)", 205), ("JARVIS (British)", 205))
-        with self.assertRaises(SpeechError):
-            resolve_speech_options(config, "Daniel", 205)
+        say_voices = ({"name": "Daniel", "locale": "en_GB", "engine": "say"},)
+        with patch("jarvis.speech.english_voices", return_value=say_voices), \
+             patch("jarvis.speech._say_runtime_ready", return_value=True), \
+             patch("jarvis.speech._piper_runtime_ready", return_value=False):
+            self.assertEqual([voice["name"] for voice in available_voices(config)], ["Daniel"])
+            # The configured default is unreachable, so a usable voice is chosen
+            # rather than naming one that cannot speak.
+            self.assertEqual(default_voice(config), "Daniel")
+            with self.assertRaises(SpeechError):
+                resolve_speech_options(config, "JARVIS (British)", 205)
+
+    def test_a_colliding_piper_name_stays_distinguishable(self):
+        config = Config(tts_engine="say", piper_voice_name="Daniel")
+        say_voices = ({"name": "Daniel", "locale": "en_GB", "engine": "say"},)
+        with patch("jarvis.speech.english_voices", return_value=say_voices), \
+             patch("jarvis.speech._say_runtime_ready", return_value=True), \
+             patch("jarvis.speech._piper_runtime_ready", return_value=True):
+            names = [voice["name"] for voice in available_voices(config)]
+            self.assertEqual(names, ["Daniel", "Daniel (Piper)"])
+            self.assertEqual(voice_engine(config, "Daniel"), "say")
+            self.assertEqual(voice_engine(config, "Daniel (Piper)"), "piper")
 
     def test_length_scale_maps_and_clamps_rate(self):
         self.assertEqual(length_scale_for_rate(190), 1.0)
@@ -401,35 +432,45 @@ class SpeechTests(unittest.TestCase):
         self.assertLessEqual(length_scale_for_rate(120), speech.PIPER_LENGTH_SCALE_MAX)
 
     def test_piper_command_never_contains_the_text(self):
-        command = piper_command(Config(tts_engine="piper"), "/tmp/out.wav", 1.0)
+        # piper-tts takes text as a positional argument; the worker protocol
+        # keeps it on standard input so it never reaches an argument vector.
+        command = piper_command(Config(tts_engine="piper"))
         self.assertIn("--model", command)
-        self.assertIn("--output_file", command)
-        self.assertIn("--length_scale", command)
+        self.assertIn("--serve", command)
+        self.assertTrue(command[1].endswith("piper_synthesize.py"))
         self.assertNotIn("private reply text", command)
 
-    def test_piper_speech_uses_standard_input_and_plays_rendered_audio(self):
+    def test_playback_is_skipped_when_stop_lands_between_render_and_playback(self):
+        # Piper renders a whole phrase before playing it. A stop that arrives in
+        # that gap has no process to terminate, so the guard must refuse to start
+        # playback rather than speaking a phrase the user already interrupted.
+        speech.stop()
+        with speech._lock:
+            rendered_generation = speech._generation
+        speech.stop()
+        calls = []
+
+        def fake_popen(command, **kwargs):
+            calls.append(command)
+            raise AssertionError("interrupted playback must not spawn a process")
+
+        with patch("jarvis.speech.subprocess.Popen", side_effect=fake_popen):
+            speech._play_audio(Config(tts_engine="piper"), "/tmp/jarvis-test.wav", rendered_generation)
+        self.assertEqual(calls, [])
+
+    def test_playback_proceeds_when_its_generation_still_owns_the_channel(self):
+        speech.stop()
+        with speech._lock:
+            current = speech._generation
         commands = []
 
-        class Sink:
-            def __init__(self):
-                self.data = b""
-
-            def write(self, value):
-                self.data += value
-
-            def close(self):
-                pass
-
-        class FakeProcess:
-            def __init__(self, needs_stdin):
-                self.stdin = Sink() if needs_stdin else None
-                self.returncode = None
+        class DoneProcess:
+            returncode = 0
 
             def poll(self):
                 return self.returncode
 
             def wait(self, timeout=None):
-                self.returncode = 0
                 return 0
 
             def terminate(self):
@@ -439,20 +480,206 @@ class SpeechTests(unittest.TestCase):
                 self.returncode = -9
 
         def fake_popen(command, **kwargs):
-            process = FakeProcess(kwargs.get("stdin") is subprocess.PIPE)
-            commands.append((command, process))
-            return process
+            commands.append(command)
+            return DoneProcess()
 
-        config = Config(tts_engine="piper")
-        with patch("jarvis.speech.runtime_ready", return_value=True), patch("jarvis.speech.subprocess.Popen", side_effect=fake_popen):
-            speech.speak(config, "private reply text")
-        synth_command, synth_process = commands[0]
-        play_command, _ = commands[1]
-        self.assertIn("--model", synth_command)
-        self.assertNotIn("private reply text", synth_command)
-        self.assertEqual(synth_process.stdin.data, b"private reply text")
-        self.assertEqual(play_command[0], str(speech.AFPLAY))
-        self.assertNotIn("private reply text", play_command)
+        with patch("jarvis.speech.subprocess.Popen", side_effect=fake_popen):
+            speech._play_audio(Config(tts_engine="piper"), "/tmp/jarvis-test.wav", current)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][0], str(speech.AFPLAY))
+        speech.stop()
+
+    def test_newer_utterance_supersedes_an_earlier_pending_render(self):
+        speech.stop()
+        with speech._lock:
+            earlier = speech._generation
+        # A newer phrase claims the channel while the earlier one was rendering.
+        with speech._lock:
+            speech._claim()
+        calls = []
+        with patch("jarvis.speech.subprocess.Popen", side_effect=lambda *a, **k: calls.append(a)):
+            speech._play_audio(Config(tts_engine="piper"), "/tmp/jarvis-test.wav", earlier)
+        self.assertEqual(calls, [], "an out-of-order phrase must not play after a newer one starts")
+        speech.stop()
+
+
+    def test_removes_backend_metadata(self):
+        raw = b'data: {"model":"/private/path/model.gguf","system_fingerprint":"secret","choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}\n'
+        clean = sanitize_sse_line(raw)
+        self.assertEqual(clean, b'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}\n\n')
+        self.assertNotIn(b"model.gguf", clean)
+
+    def test_preserves_done_marker(self):
+        self.assertEqual(sanitize_sse_line(b"data: [DONE]\n"), b"data: [DONE]\n\n")
+
+    def test_backend_connection_failure_is_bounded(self):
+        with patch("jarvis.backend._headers", return_value={}), patch(
+            "jarvis.backend.urllib.request.urlopen", side_effect=OSError("offline")
+        ):
+            with self.assertRaises(BackendError):
+                list(stream_chat(Config(), [{"role": "user", "content": "test"}]))
+
+    def test_counts_unsupported_model_scripts(self):
+        self.assertEqual(count_unsupported_script_characters("English only"), 0)
+        self.assertEqual(count_unsupported_script_characters("测试内容"), 4)
+
+    def test_rejects_unexpected_script_before_stream_completion(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def __iter__(self):
+                return iter([
+                    'data: {"choices":[{"delta":{"content":"测"},"finish_reason":null}]}\n'.encode(),
+                    'data: {"choices":[{"delta":{"content":"试"},"finish_reason":null}]}\n'.encode(),
+                    'data: {"choices":[{"delta":{"content":"内"},"finish_reason":null}]}\n'.encode(),
+                    b"data: [DONE]\n",
+                ])
+
+        with patch("jarvis.backend._headers", return_value={}), patch(
+            "jarvis.backend.urllib.request.urlopen", return_value=FakeResponse()
+        ):
+            with self.assertRaises(BackendError):
+                list(stream_chat(Config(), [{"role": "user", "content": "test"}]))
+
+
+    # --- Resident Piper worker ---------------------------------------------
+    #
+    # These run a real subprocess speaking the real protocol. A fake interpreter
+    # stands in for the piper virtual environment: it records each start, then
+    # answers requests exactly as scripts/piper_synthesize.py --serve does.
+
+    FAKE_WORKER = (
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys, wave\n"
+        "open(os.environ['WORKER_STARTS'], 'a').write('start\\n')\n"
+        "if os.environ.get('WORKER_FAIL_LOAD'): sys.exit(1)\n"
+        "print(json.dumps({'status': 'ready'}), flush=True)\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    open(os.environ['WORKER_REQUESTS'], 'a').write(line)\n"
+        "    if os.environ.get('WORKER_DIE_ON_REQUEST'): sys.exit(1)\n"
+        "    with wave.open(request['output_file'], 'wb') as out:\n"
+        "        out.setnchannels(1); out.setsampwidth(2); out.setframerate(22050)\n"
+        "        out.writeframes(b'\\x00\\x00' * 2205)\n"
+        "    print(json.dumps({'status': 'ok'}), flush=True)\n"
+    )
+
+    def _worker_fixture(self, root):
+        interpreter = Path(root) / "python3"
+        interpreter.write_text(self.FAKE_WORKER)
+        interpreter.chmod(0o755)
+        model = Path(root) / "voice.onnx"
+        model.write_text("")
+        starts = Path(root) / "starts.log"
+        requests = Path(root) / "requests.log"
+        starts.write_text("")
+        requests.write_text("")
+        os.environ["WORKER_STARTS"] = str(starts)
+        os.environ["WORKER_REQUESTS"] = str(requests)
+        self.addCleanup(speech.shutdown)
+        for key in ("WORKER_STARTS", "WORKER_REQUESTS", "WORKER_DIE_ON_REQUEST", "WORKER_FAIL_LOAD"):
+            self.addCleanup(os.environ.pop, key, None)
+        speech.shutdown()
+        config = Config(tts_engine="piper", piper_python=str(interpreter), piper_voice=str(model))
+        return config, starts, requests
+
+    def _piper_patches(self):
+        return (
+            patch("jarvis.speech.runtime_ready", return_value=True),
+            patch("jarvis.speech.voice_engine", return_value="piper"),
+        )
+
+    def test_the_voice_model_loads_once_across_many_phrases(self):
+        # The point of the worker: three sentences must not pay three model
+        # loads, which is what made the pause between spoken sentences long.
+        with tempfile.TemporaryDirectory() as root:
+            config, starts, requests = self._worker_fixture(root)
+            played = []
+            ready, engine = self._piper_patches()
+            with ready, engine, patch("jarvis.speech._play_audio", side_effect=lambda *a, **k: played.append(a)):
+                for phrase in ("First sentence.", "Second sentence.", "Third sentence."):
+                    speech.speak(config, phrase)
+            self.assertEqual(starts.read_text().count("start"), 1)
+            self.assertEqual(len(played), 3)
+            sent = [json.loads(line) for line in requests.read_text().splitlines()]
+            self.assertEqual([item["text"] for item in sent],
+                             ["First sentence.", "Second sentence.", "Third sentence."])
+
+    def test_worker_restarts_once_after_it_dies(self):
+        with tempfile.TemporaryDirectory() as root:
+            config, starts, _ = self._worker_fixture(root)
+            ready, engine = self._piper_patches()
+            with ready, engine, patch("jarvis.speech._play_audio"):
+                speech.speak(config, "First sentence.")
+                self.assertEqual(starts.read_text().count("start"), 1)
+                with speech._worker_lock:
+                    speech._worker.terminate()
+                speech.speak(config, "Second sentence.")
+            self.assertEqual(starts.read_text().count("start"), 2)
+
+    def test_a_worker_that_fails_every_request_reports_failure(self):
+        with tempfile.TemporaryDirectory() as root:
+            config, starts, _ = self._worker_fixture(root)
+            os.environ["WORKER_DIE_ON_REQUEST"] = "1"
+            ready, engine = self._piper_patches()
+            with ready, engine, patch("jarvis.speech._play_audio"):
+                with self.assertRaises(SpeechError):
+                    speech.speak(config, "Doomed sentence.")
+            # Retried exactly once rather than looping.
+            self.assertEqual(starts.read_text().count("start"), 2)
+
+    def test_a_worker_that_cannot_load_the_voice_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as root:
+            config, _, _ = self._worker_fixture(root)
+            os.environ["WORKER_FAIL_LOAD"] = "1"
+            ready, engine = self._piper_patches()
+            with ready, engine, patch("jarvis.speech._play_audio"):
+                with self.assertRaises(SpeechError):
+                    speech.speak(config, "Never spoken.")
+
+    def test_the_utterance_never_reaches_the_worker_arguments(self):
+        with tempfile.TemporaryDirectory() as root:
+            config, _, requests = self._worker_fixture(root)
+            ready, engine = self._piper_patches()
+            with ready, engine, patch("jarvis.speech._play_audio"):
+                speech.speak(config, "private reply text")
+            self.assertNotIn("private reply text", " ".join(piper_command(config)))
+            # It arrived on standard input instead.
+            self.assertIn("private reply text", requests.read_text())
+
+    def test_stop_during_rendering_discards_the_phrase_and_its_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            config, _, _ = self._worker_fixture(root)
+            rendered = []
+
+            def render_then_stop(cfg, text, path, scale):
+                rendered.append(path)
+                Path(path).write_bytes(b"RIFF")
+                # The user presses Stop while this phrase was still rendering.
+                speech.stop()
+
+            ready, engine = self._piper_patches()
+            with ready, engine, \
+                 patch("jarvis.speech._render_piper", side_effect=render_then_stop), \
+                 patch("jarvis.speech.subprocess.Popen", side_effect=AssertionError("must not play")):
+                speech.speak(config, "interrupted reply text")
+            self.assertFalse(os.path.exists(rendered[0]), "the discarded render must be deleted")
+
+    def test_shutdown_releases_the_worker(self):
+        with tempfile.TemporaryDirectory() as root:
+            config, _, _ = self._worker_fixture(root)
+            ready, engine = self._piper_patches()
+            with ready, engine, patch("jarvis.speech._play_audio"):
+                speech.speak(config, "First sentence.")
+            self.assertIsNotNone(speech._worker)
+            process = speech._worker.process
+            speech.shutdown()
+            self.assertIsNone(speech._worker)
+            self.assertIsNotNone(process.poll(), "the worker process must be reaped")
 
 
 class StreamSanitizationTests(unittest.TestCase):
@@ -497,7 +724,6 @@ class StreamSanitizationTests(unittest.TestCase):
         ):
             with self.assertRaises(BackendError):
                 list(stream_chat(Config(), [{"role": "user", "content": "test"}]))
-
 
 class TranscriptionTests(unittest.TestCase):
     def test_accepts_bounded_pcm_wav(self):

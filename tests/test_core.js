@@ -11,6 +11,7 @@ const {
   isLearnModeStartCommand,
   isLearnModeStopCommand,
   isMemoryControlCommand,
+  resolveSpeechSelection,
   shouldConsiderAutoMemory,
   trimConversationHistory,
   unsupportedActionResponse,
@@ -108,3 +109,73 @@ assert.strictEqual(shouldConsiderAutoMemory('Thanks!'), false);
 assert.strictEqual(shouldConsiderAutoMemory('Explain the synthetic team meeting schedule.'), false);
 
 console.log('browser core logic: ok');
+
+// Speech selection: configuration is authoritative unless a still-current
+// browser override exists.
+const installedVoices = [
+  {name: 'Daniel', locale: 'en_GB'},
+  {name: 'Jamie (Premium)', locale: 'en_GB'},
+  {name: 'Samantha', locale: 'en_US'},
+];
+const speechOptions = {
+  voices: installedVoices,
+  minimumRate: 120,
+  maximumRate: 350,
+  defaultRate: 190,
+  defaultVoice: 'Jamie (Premium)',
+};
+
+// No stored override: the configured voice is used.
+let selection = resolveSpeechSelection(speechOptions, {});
+assert.strictEqual(selection.voice, 'Jamie (Premium)');
+assert.strictEqual(selection.rate, 190);
+assert.strictEqual(selection.overridden, false);
+assert.deepStrictEqual(selection.stale, []);
+
+// A legacy override with no recorded default is stale; configuration wins.
+selection = resolveSpeechSelection(speechOptions, {voice: 'Daniel', rate: '210'});
+assert.strictEqual(selection.voice, 'Jamie (Premium)');
+assert.strictEqual(selection.rate, 190);
+assert.strictEqual(selection.overridden, false);
+assert.deepStrictEqual(selection.stale.sort(), ['rate', 'voice']);
+
+// An override saved against the current configured default still applies.
+selection = resolveSpeechSelection(speechOptions, {
+  voice: 'Samantha',
+  voiceDefault: 'Jamie (Premium)',
+  rate: '210',
+  rateDefault: '190',
+});
+assert.strictEqual(selection.voice, 'Samantha');
+assert.strictEqual(selection.rate, 210);
+assert.strictEqual(selection.overridden, true);
+assert.deepStrictEqual(selection.stale, []);
+
+// Changing the configured voice discards the override saved against the old one.
+selection = resolveSpeechSelection(
+  {...speechOptions, defaultVoice: 'Daniel'},
+  {voice: 'Samantha', voiceDefault: 'Jamie (Premium)', rate: '210', rateDefault: '190'},
+);
+assert.strictEqual(selection.voice, 'Daniel');
+assert.strictEqual(selection.rate, 210);
+assert.deepStrictEqual(selection.stale, ['voice']);
+
+// An override naming a voice that is no longer installed is discarded.
+selection = resolveSpeechSelection(speechOptions, {voice: 'Alex', voiceDefault: 'Jamie (Premium)'});
+assert.strictEqual(selection.voice, 'Jamie (Premium)');
+assert.deepStrictEqual(selection.stale, ['voice']);
+
+// A configured voice that is not installed falls back to an installed voice.
+selection = resolveSpeechSelection({...speechOptions, defaultVoice: 'Jamie'}, {});
+assert.strictEqual(selection.voice, 'Daniel');
+assert.strictEqual(selection.defaultVoice, 'Daniel');
+
+// Out-of-range rates are rejected rather than sent to the server.
+selection = resolveSpeechSelection(speechOptions, {voice: null, rate: '900', rateDefault: '190'});
+assert.strictEqual(selection.rate, 190);
+assert.deepStrictEqual(selection.stale, ['rate']);
+
+// Without installed voices nothing is invented.
+selection = resolveSpeechSelection({voices: []}, {voice: 'Daniel', voiceDefault: 'Daniel'});
+assert.strictEqual(selection.voice, null);
+assert.strictEqual(selection.rate, null);

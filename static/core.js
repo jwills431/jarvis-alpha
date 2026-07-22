@@ -132,6 +132,62 @@
     )).join('\n\n');
   }
 
+  function resolveSpeechSelection(options, stored) {
+    // A saved browser override applies only while it still names an installed
+    // voice and the configured default it was saved against is unchanged. When
+    // the owner edits the configured voice or rate, the override is reported as
+    // stale so configuration changes take effect on the next reload instead of
+    // being permanently shadowed by browser storage.
+    if (!options || !Array.isArray(options.voices) || !options.voices.length) {
+      return {voice: null, rate: null, defaultVoice: null, defaultRate: null, overridden: false, stale: []};
+    }
+    const names = new Set(options.voices.map((item) => (item && typeof item.name === 'string' ? item.name : null)));
+    const defaultVoice = names.has(options.defaultVoice) ? options.defaultVoice : options.voices[0].name;
+    const minimumRate = Number.isInteger(options.minimumRate) ? options.minimumRate : 120;
+    const maximumRate = Number.isInteger(options.maximumRate) ? options.maximumRate : 350;
+    const configuredRate = Number.isInteger(options.defaultRate) ? options.defaultRate : minimumRate;
+    const defaultRate = Math.min(Math.max(configuredRate, minimumRate), maximumRate);
+    const saved = stored || {};
+    const stale = [];
+
+    let voice = defaultVoice;
+    let voiceOverridden = false;
+    if (typeof saved.voice === 'string' && saved.voice) {
+      if (names.has(saved.voice) && saved.voiceDefault === defaultVoice) {
+        voice = saved.voice;
+        voiceOverridden = saved.voice !== defaultVoice;
+      } else {
+        stale.push('voice');
+      }
+    }
+
+    let rate = defaultRate;
+    let rateOverridden = false;
+    if (saved.rate !== null && saved.rate !== undefined && saved.rate !== '') {
+      const savedRate = Number.parseInt(saved.rate, 10);
+      const savedAgainst = Number.parseInt(saved.rateDefault, 10);
+      if (Number.isInteger(savedRate) && savedRate >= minimumRate && savedRate <= maximumRate && savedAgainst === defaultRate) {
+        rate = savedRate;
+        rateOverridden = savedRate !== defaultRate;
+      } else {
+        stale.push('rate');
+      }
+    }
+
+    const selected = options.voices.find((item) => item && item.name === voice);
+    return {
+      voice,
+      rate,
+      engine: selected && selected.engine === 'piper' ? 'piper' : 'say',
+      defaultVoice,
+      defaultRate,
+      minimumRate,
+      maximumRate,
+      overridden: voiceOverridden || rateOverridden,
+      stale,
+    };
+  }
+
   root.JarvisCore = Object.freeze({
     isConversationStopCommand,
     normalizeConversationCommand,
@@ -143,6 +199,7 @@
     isLearnModeStartCommand,
     isLearnModeStopCommand,
     isMemoryControlCommand,
+    resolveSpeechSelection,
     shouldConsiderAutoMemory,
     trimConversationHistory,
   });
