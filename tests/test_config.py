@@ -1,3 +1,6 @@
+import time
+import base64
+import hashlib
 import json
 import io
 import os
@@ -13,7 +16,7 @@ from unittest.mock import patch
 
 from jarvis.config import Config, load_config
 from jarvis.backend import BackendError, count_unsupported_script_characters, sanitize_sse_line, stream_chat
-from jarvis.server import SYSTEM_PROMPT, JarvisServer, exact_spelling_recall, extract_authoritative_spellings, is_source_bound_request, prepare_model_messages, validate_messages
+from jarvis.server import SYSTEM_PROMPT, JarvisServer, check_basic_auth, exact_spelling_recall, extract_authoritative_spellings, is_source_bound_request, prepare_model_messages, validate_messages, verify_password
 from jarvis import speech
 from jarvis.speech import (
     SpeechError,
@@ -100,6 +103,25 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Config(tts_engine="cloud").validate()
 
+    def test_allows_fish_engine(self):
+        self.assertEqual(Config(tts_engine="fish").validate().tts_engine, "fish")
+
+    def test_rejects_non_loopback_fish_base_url(self):
+        with self.assertRaises(ValueError):
+            Config(fish_base_url="http://192.168.1.2:8080").validate()
+
+    def test_rejects_option_like_fish_voice_name(self):
+        with self.assertRaises(ValueError):
+            Config(fish_voice_name="--bad-option").validate()
+
+    def test_rejects_bad_fish_reference_id(self):
+        with self.assertRaises(ValueError):
+            Config(fish_reference_id="../etc/passwd").validate()
+
+    def test_rejects_out_of_range_fish_top_p(self):
+        with self.assertRaises(ValueError):
+            Config(fish_top_p=0).validate()
+
     def test_rejects_option_like_piper_voice_name(self):
         with self.assertRaises(ValueError):
             Config(piper_voice_name="--bad-option").validate()
@@ -123,6 +145,123 @@ class ConfigTests(unittest.TestCase):
     def test_rejects_conversation_vad_threshold_below_push_to_talk(self):
         with self.assertRaises(ValueError):
             Config(whisper_vad_threshold=0.6, whisper_conversation_vad_threshold=0.5).validate()
+
+    # --- Server-ify: TLS, auth, LAN bind interlock, playback ---------------
+
+    @staticmethod
+    def _auth_kwargs(username="joe", password="s3cretpw1", iterations=200_000):
+        salt = os.urandom(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+        return {
+            "auth_enabled": True,
+            "auth_username": username,
+            "auth_password_hash": digest.hex(),
+            "auth_password_salt": salt.hex(),
+            "auth_pbkdf2_iterations": iterations,
+        }
+
+    def _lan_kwargs(self):
+        return {
+            "app_host": "0.0.0.0",
+            "tls_cert": "certs/jarvis.crt",
+            "tls_key": "certs/jarvis.key",
+            **self._auth_kwargs(),
+        }
+
+    def test_default_config_serves_plain_http(self):
+        config = Config().validate()
+        self.assertFalse(config.tls_enabled)
+        self.assertEqual(config.app_scheme, "http")
+        self.assertEqual(config.tts_playback, "host")
+
+    def test_tls_enabled_requires_both_cert_and_key(self):
+        self.assertTrue(Config(tls_cert="a.crt", tls_key="a.key").validate().tls_enabled)
+        with self.assertRaises(ValueError):
+            Config(tls_cert="a.crt").validate()
+        with self.assertRaises(ValueError):
+            Config(tls_key="a.key").validate()
+
+    def test_tls_sets_https_scheme(self):
+        self.assertEqual(Config(tls_cert="a.crt", tls_key="a.key").validate().app_scheme, "https")
+
+    def test_lan_bind_requires_tls_and_auth(self):
+        # Bare LAN bind is rejected (preserves the original loopback guarantee).
+        with self.assertRaises(ValueError):
+            Config(app_host="0.0.0.0").validate()
+        # TLS alone is not enough without auth.
+        with self.assertRaises(ValueError):
+            Config(app_host="0.0.0.0", tls_cert="a.crt", tls_key="a.key").validate()
+        # Auth alone is not enough without TLS.
+        with self.assertRaises(ValueError):
+            Config(app_host="0.0.0.0", **self._auth_kwargs()).validate()
+
+    def test_lan_bind_allowed_behind_full_interlock(self):
+        config = Config(**self._lan_kwargs()).validate()
+        self.assertEqual(config.app_host, "0.0.0.0")
+        self.assertTrue(config.tls_enabled)
+        self.assertTrue(config.auth_enabled)
+
+    def test_rejects_malformed_auth_password_hash(self):
+        bad = dict(self._auth_kwargs(), auth_password_hash="not-hex")
+        with self.assertRaises(ValueError):
+            Config(**bad).validate()
+
+    def test_auth_enabled_requires_username_and_credentials(self):
+        with self.assertRaises(ValueError):
+            Config(auth_enabled=True).validate()
+
+    def test_rejects_unknown_playback_mode(self):
+        with self.assertRaises(ValueError):
+            Config(tts_playback="speaker").validate()
+
+    def test_allows_browser_playback(self):
+        self.assertEqual(Config(tts_playback="browser").validate().tts_playback, "browser")
+
+
+class AuthTests(unittest.TestCase):
+    @staticmethod
+    def _config(password="s3cretpw1", username="joe", iterations=200_000):
+        salt = os.urandom(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+        return Config(
+            auth_enabled=True,
+            auth_username=username,
+            auth_password_hash=digest.hex(),
+            auth_password_salt=salt.hex(),
+            auth_pbkdf2_iterations=iterations,
+        )
+
+    @staticmethod
+    def _header(username, password):
+        token = base64.b64encode(f"{username}:{password}".encode()).decode()
+        return "Basic " + token
+
+    def test_disabled_auth_allows_every_request(self):
+        self.assertTrue(check_basic_auth(Config(), None))
+
+    def test_accepts_correct_credentials(self):
+        config = self._config()
+        self.assertTrue(check_basic_auth(config, self._header("joe", "s3cretpw1")))
+
+    def test_rejects_wrong_password(self):
+        config = self._config()
+        self.assertFalse(check_basic_auth(config, self._header("joe", "nope")))
+
+    def test_rejects_wrong_username(self):
+        config = self._config()
+        self.assertFalse(check_basic_auth(config, self._header("eve", "s3cretpw1")))
+
+    def test_rejects_missing_and_malformed_headers(self):
+        config = self._config()
+        self.assertFalse(check_basic_auth(config, None))
+        self.assertFalse(check_basic_auth(config, "Bearer token"))
+        self.assertFalse(check_basic_auth(config, "Basic !!!not-base64"))
+        self.assertFalse(check_basic_auth(config, "Basic " + base64.b64encode(b"nocolon").decode()))
+
+    def test_verify_password_matches_only_the_right_secret(self):
+        config = self._config(password="correct horse")
+        self.assertTrue(verify_password(config, "correct horse"))
+        self.assertFalse(verify_password(config, "correct horse "))
 
 
 class MessageValidationTests(unittest.TestCase):
@@ -423,6 +562,245 @@ class SpeechTests(unittest.TestCase):
             self.assertEqual(names, ["Daniel", "Daniel (Piper)"])
             self.assertEqual(voice_engine(config, "Daniel"), "say")
             self.assertEqual(voice_engine(config, "Daniel (Piper)"), "piper")
+
+    def test_fish_voice_is_offered_and_tagged_when_the_server_is_ready(self):
+        # The neural Fish voice appears beside the built-in voices, tagged with
+        # its own engine, only when it is enabled and the server is reachable.
+        config = Config(tts_engine="say", fish_enabled=True, fish_voice_name="JARVIS (Fish)")
+        say_voices = ({"name": "Daniel", "locale": "en_GB", "engine": "say"},)
+        with patch("jarvis.speech.english_voices", return_value=say_voices), \
+             patch("jarvis.speech._say_runtime_ready", return_value=True), \
+             patch("jarvis.speech._piper_runtime_ready", return_value=False), \
+             patch("jarvis.speech._fish_runtime_ready", return_value=True):
+            voices = available_voices(config)
+            self.assertEqual([voice["name"] for voice in voices], ["Daniel", "JARVIS (Fish)"])
+            self.assertEqual(voice_engine(config, "JARVIS (Fish)"), "fish")
+            self.assertEqual(voice_engine(config, "Daniel"), "say")
+
+    def test_fish_voice_is_absent_when_disabled(self):
+        config = Config()  # fish_enabled defaults to False, so no server probe runs.
+        say_voices = ({"name": "Daniel", "locale": "en_GB", "engine": "say"},)
+        with patch("jarvis.speech.english_voices", return_value=say_voices), \
+             patch("jarvis.speech._say_runtime_ready", return_value=True), \
+             patch("jarvis.speech._piper_runtime_ready", return_value=False):
+            self.assertEqual([voice["name"] for voice in available_voices(config)], ["Daniel"])
+
+    def test_fish_render_posts_json_reference_and_writes_audio(self):
+        captured = {}
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b"RIFF\x00\x00\x00\x00WAVEfake-audio"
+
+        def fake_urlopen(request, timeout=None):
+            captured["url"] = request.full_url
+            captured["body"] = request.data
+            return FakeResponse()
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+            out = handle.name
+        try:
+            with patch("jarvis.speech.urllib.request.urlopen", side_effect=fake_urlopen):
+                speech._render_fish(Config(fish_enabled=True), "private reply text", out)
+            self.assertTrue(Path(out).read_bytes().startswith(b"RIFF"))
+            body = json.loads(captured["body"])
+            self.assertEqual(body["reference_id"], "jarvis")
+            self.assertEqual(body["text"], "private reply text")
+            # Only reply text (in the body) and a voice id leave; not in the URL.
+            self.assertNotIn("private reply text", captured["url"])
+        finally:
+            os.unlink(out)
+
+    def test_fish_render_rejects_a_non_audio_response(self):
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"error":"bad request"}'
+
+        with patch("jarvis.speech.urllib.request.urlopen", return_value=FakeResponse()):
+            with self.assertRaises(SpeechError):
+                speech._render_fish(Config(fish_enabled=True), "text", "/tmp/jarvis-fish-should-not-write.wav")
+        self.assertFalse(os.path.exists("/tmp/jarvis-fish-should-not-write.wav"))
+
+    def test_fish_synthesis_connection_failure_is_bounded(self):
+        with patch("jarvis.speech.urllib.request.urlopen", side_effect=OSError("offline")):
+            with self.assertRaises(SpeechError):
+                speech._render_fish(Config(fish_enabled=True), "text", "/tmp/jarvis-fish.wav")
+
+    def test_speak_dispatches_to_fish_and_plays(self):
+        rendered, played = [], []
+        config = Config(tts_engine="fish", fish_enabled=True)
+        with patch("jarvis.speech.runtime_ready", return_value=True), \
+             patch("jarvis.speech._say_runtime_ready", return_value=False), \
+             patch("jarvis.speech._piper_runtime_ready", return_value=False), \
+             patch("jarvis.speech._fish_runtime_ready", return_value=True), \
+             patch("jarvis.speech._render_fish", side_effect=lambda c, t, p, o=None: rendered.append((t, p))), \
+             patch("jarvis.speech._play_audio", side_effect=lambda *a, **k: played.append(a)):
+            speech.speak(config, "Good evening, sir.")
+        self.assertEqual([item[0] for item in rendered], ["Good evening, sir."])
+        self.assertEqual(len(played), 1)
+
+    def test_render_audio_returns_wav_bytes_without_host_playback(self):
+        # Browser playback mode: the phrase is rendered to WAV bytes and returned
+        # for the client to play, and no afplay process is ever spawned.
+        config = Config(tts_engine="fish", fish_enabled=True, tts_playback="browser")
+
+        def fake_render(_config, _text, path, _options=None):
+            with wave.open(path, "wb") as out:
+                out.setnchannels(1)
+                out.setsampwidth(2)
+                out.setframerate(22050)
+                out.writeframes(b"\x00\x00" * 128)
+
+        with patch("jarvis.speech.runtime_ready", return_value=True), \
+             patch("jarvis.speech.voice_engine", return_value="fish"), \
+             patch("jarvis.speech._render_fish", side_effect=fake_render), \
+             patch("jarvis.speech._play_audio", side_effect=AssertionError("browser mode must not play on host")):
+            audio = speech.render_audio(config, "Good evening, sir.")
+        self.assertTrue(audio.startswith(b"RIFF"))
+        self.assertGreater(len(audio), 44)
+
+    def test_render_audio_rejects_a_non_wav_result(self):
+        config = Config(tts_engine="fish", fish_enabled=True, tts_playback="browser")
+
+        def write_json(_config, _text, path, _options=None):
+            with open(path, "wb") as handle:
+                handle.write(b'{"error":"nope"}')
+
+        with patch("jarvis.speech.runtime_ready", return_value=True), \
+             patch("jarvis.speech.voice_engine", return_value="fish"), \
+             patch("jarvis.speech._render_fish", side_effect=write_json):
+            with self.assertRaises(SpeechError):
+                speech.render_audio(config, "text")
+
+    def test_browser_playback_needs_no_afplay(self):
+        # Piper/Fish readiness must not require afplay in browser mode, so the
+        # headless LAN server (no host audio device) can still be "ready".
+        with patch("jarvis.speech._afplay_ready", return_value=False):
+            self.assertTrue(speech._playback_ready(Config(tts_playback="browser")))
+            self.assertFalse(speech._playback_ready(Config(tts_playback="host")))
+
+    def test_resolve_fish_options_merges_defaults_and_validates(self):
+        config = Config(fish_enabled=True)
+        self.assertEqual(speech.resolve_fish_options(config), {
+            "temperature": config.fish_temperature,
+            "top_p": config.fish_top_p,
+            "repetition_penalty": config.fish_repetition_penalty,
+            "max_new_tokens": config.fish_max_new_tokens,
+        })
+        merged = speech.resolve_fish_options(config, {"temperature": 0.9})
+        self.assertEqual(merged["temperature"], 0.9)
+        self.assertEqual(merged["top_p"], config.fish_top_p)  # unspecified keeps default
+        for bad in ({"temperature": 1.5}, {"temperature": 3.0}, {"top_p": 0.05}, {"repetition_penalty": 0.5},
+                    {"max_new_tokens": 10}, {"max_new_tokens": 1.5}, {"unknown": 1}, "notdict"):
+            with self.assertRaises(SpeechError):
+                speech.resolve_fish_options(config, bad)
+
+    def test_render_audio_forwards_fish_overrides(self):
+        seen = {}
+
+        def fake_render(_config, _text, path, options=None):
+            seen.update(options or {})
+            with wave.open(path, "wb") as out:
+                out.setnchannels(1)
+                out.setsampwidth(2)
+                out.setframerate(22050)
+                out.writeframes(b"\x00\x00" * 64)
+
+        config = Config(tts_engine="fish", fish_enabled=True, tts_playback="browser")
+        with patch("jarvis.speech.runtime_ready", return_value=True), \
+             patch("jarvis.speech.voice_engine", return_value="fish"), \
+             patch("jarvis.speech._render_fish", side_effect=fake_render):
+            speech.render_audio(config, "hello", fish_options={"temperature": 0.9})
+        self.assertEqual(seen["temperature"], 0.9)
+        self.assertEqual(seen["top_p"], config.fish_top_p)
+
+    def test_stream_fish_requires_a_fish_voice(self):
+        config = Config(tts_engine="fish", fish_enabled=True, tts_playback="browser")
+        with patch("jarvis.speech.runtime_ready", return_value=True), \
+             patch("jarvis.speech.voice_engine", return_value="say"):
+            with self.assertRaises(SpeechError):
+                speech.stream_fish_audio(config, "hello")
+
+    def test_stream_fish_requests_streaming_and_yields_chunks(self):
+        class FakeResponse:
+            def __init__(self):
+                self._parts = [b"\x00\x01", b"\x02\x03", b""]
+                self._index = 0
+
+            def read(self, _size):
+                part = self._parts[self._index]
+                self._index += 1
+                return part
+
+            def close(self):
+                pass
+
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse()
+
+        config = Config(tts_engine="fish", fish_enabled=True, tts_playback="browser")
+        with patch("jarvis.speech.runtime_ready", return_value=True), \
+             patch("jarvis.speech.voice_engine", return_value="fish"), \
+             patch("jarvis.speech.urllib.request.urlopen", side_effect=fake_urlopen):
+            chunks = list(speech.stream_fish_audio(config, "hello", fish_options={"temperature": 0.9}))
+        self.assertEqual(chunks, [b"\x00\x01", b"\x02\x03"])
+        self.assertTrue(captured["body"]["streaming"])
+        self.assertEqual(captured["body"]["temperature"], 0.9)
+
+    def test_fish_health_is_sticky_while_busy(self):
+        # A resident Fish that was healthy moments ago but is busy rendering (its
+        # event loop blocked, so a health probe times out) must still read healthy,
+        # so back-to-back renders in one reply are not rejected. Only a sustained
+        # outage past the grace window reports unhealthy.
+        config = Config(fish_enabled=True)
+
+        class OkResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def getcode(self):
+                return 200
+
+        speech._fish_health = None
+        speech._fish_last_ok = None
+        try:
+            with patch("jarvis.speech.urllib.request.urlopen", return_value=OkResponse()):
+                self.assertTrue(speech._fish_server_healthy(config))
+            speech._fish_health = None  # expire the short cache
+            with patch("jarvis.speech.urllib.request.urlopen", side_effect=OSError("busy")):
+                self.assertTrue(speech._fish_server_healthy(config))  # grace keeps it up
+            # Beyond the grace window, a probe failure means genuinely down.
+            speech._fish_last_ok = (config.fish_base_url, time.monotonic() - (speech.FISH_HEALTH_GRACE + 1))
+            speech._fish_health = None
+            with patch("jarvis.speech.urllib.request.urlopen", side_effect=OSError("down")):
+                self.assertFalse(speech._fish_server_healthy(config))
+        finally:
+            speech._fish_health = None
+            speech._fish_last_ok = None
 
     def test_length_scale_maps_and_clamps_rate(self):
         self.assertEqual(length_scale_for_rate(190), 1.0)

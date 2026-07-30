@@ -4,6 +4,8 @@
 .runtime-api-key
 *.pem
 *.key
+*.crt
+certs/
 config.local.json
 config.local.*
 runtime/

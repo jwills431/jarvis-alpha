@@ -34,6 +34,14 @@ class Config:
     piper_python: str = "runtime/piper-venv/bin/python3"
     piper_voice: str = "models/piper/en_GB-alan-medium.onnx"
     piper_voice_name: str = "JARVIS (British)"
+    fish_enabled: bool = False
+    fish_base_url: str = "http://127.0.0.1:8080"
+    fish_voice_name: str = "JARVIS (Fish)"
+    fish_reference_id: str = "jarvis"
+    fish_temperature: float = 0.7
+    fish_top_p: float = 0.7
+    fish_repetition_penalty: float = 1.2
+    fish_max_new_tokens: int = 1024
     request_timeout_seconds: int = 180
     max_request_bytes: int = 65_536
     max_history_messages: int = 20
@@ -49,12 +57,45 @@ class Config:
     memory_context_chars: int = 6_000
     max_tokens: int = 512
     temperature: float = 0.6
+    # --- Server-ify (private-LAN hosting): TLS, auth, LAN bind, playback ---
+    # TLS is active when both a certificate and its private key are configured.
+    # Paths may be absolute (the server runs from the Linux fs) or relative to
+    # the project root. Serving plain HTTP stays the default for local loopback
+    # development; binding to a non-loopback address requires TLS (see validate).
+    tls_cert: str = ""
+    tls_key: str = ""
+    # HTTP Basic auth over TLS. The password is never stored in the clear: only a
+    # PBKDF2-HMAC-SHA256 digest and its salt (both lowercase hex) are kept, and
+    # the server compares in constant time. Generate with scripts/make_auth.py.
+    auth_enabled: bool = False
+    auth_username: str = ""
+    auth_password_hash: str = ""
+    auth_password_salt: str = ""
+    auth_pbkdf2_iterations: int = 200_000
+    # Where synthesized speech is played. "host" keeps the macOS afplay path used
+    # in local development; "browser" returns the rendered WAV to the web client
+    # so audio plays on whichever LAN device is talking to JARVIS (the model for
+    # the headless server, which has no audio output of its own).
+    tts_playback: str = "host"
+
+    @property
+    def tls_enabled(self) -> bool:
+        return bool(self.tls_cert) and bool(self.tls_key)
+
+    @property
+    def app_scheme(self) -> str:
+        return "https" if self.tls_enabled else "http"
 
     def validate(self) -> "Config":
         if type(self.memory_enabled) is not bool or type(self.auto_memory_enabled) is not bool:
             raise ValueError("memory flags must be booleans")
-        if not ipaddress.ip_address(self.app_host).is_loopback:
-            raise ValueError("app_host must be a loopback IP address")
+        # app_host must be a valid IP. Loopback is always allowed. Exposing JARVIS
+        # on the LAN (any non-loopback bind, e.g. 0.0.0.0) is permitted only behind
+        # the full private-hosting interlock: TLS and Basic auth must both be
+        # configured, so the box can never be exposed insecurely by misconfiguration.
+        host_ip = ipaddress.ip_address(self.app_host)
+        if not host_ip.is_loopback and not (self.tls_enabled and self.auth_enabled):
+            raise ValueError("non-loopback app_host requires TLS and auth to be configured")
         backend = urlparse(self.llama_base_url)
         if backend.scheme != "http" or not backend.hostname:
             raise ValueError("llama_base_url must be an HTTP URL")
@@ -97,8 +138,8 @@ class Config:
             raise ValueError("whisper_vad_min_speech_ms must be between 100 and 2000")
         if not 32_044 <= self.max_audio_bytes <= 10_000_000:
             raise ValueError("max_audio_bytes must be between 32044 and 10000000")
-        if self.tts_engine not in ("say", "piper"):
-            raise ValueError("tts_engine must be 'say' or 'piper'")
+        if self.tts_engine not in ("say", "piper", "fish"):
+            raise ValueError("tts_engine must be 'say', 'piper', or 'fish'")
         piper_python = Path(self.piper_python)
         if piper_python.is_absolute() or ".." in piper_python.parts:
             raise ValueError("piper_python must be a relative path inside the project")
@@ -109,6 +150,27 @@ class Config:
             raise ValueError("tts_voice is invalid")
         if not re.fullmatch(r"[^\x00-\x1f\x7f]{1,80}", self.piper_voice_name) or self.piper_voice_name.startswith("-"):
             raise ValueError("piper_voice_name is invalid")
+        if type(self.fish_enabled) is not bool:
+            raise ValueError("fish_enabled must be a boolean")
+        fish_backend = urlparse(self.fish_base_url)
+        if fish_backend.scheme != "http" or not fish_backend.hostname:
+            raise ValueError("fish_base_url must be an HTTP URL")
+        if not ipaddress.ip_address(fish_backend.hostname).is_loopback:
+            raise ValueError("fish_base_url must use a loopback IP address")
+        if not re.fullmatch(r"[^\x00-\x1f\x7f]{1,80}", self.fish_voice_name) or self.fish_voice_name.startswith("-"):
+            raise ValueError("fish_voice_name is invalid")
+        if not re.fullmatch(r"[a-zA-Z0-9\-_ ]{1,255}", self.fish_reference_id):
+            raise ValueError("fish_reference_id is invalid")
+        # Ranges match Fish's own ServeTTSRequest limits so a configured default
+        # is never rejected by the Fish server at render time.
+        if not 0.1 <= self.fish_temperature <= 1.0:
+            raise ValueError("fish_temperature must be between 0.1 and 1.0")
+        if not 0.1 <= self.fish_top_p <= 1.0:
+            raise ValueError("fish_top_p must be between 0.1 and 1.0")
+        if not 0.9 <= self.fish_repetition_penalty <= 2.0:
+            raise ValueError("fish_repetition_penalty must be between 0.9 and 2.0")
+        if not 64 <= self.fish_max_new_tokens <= 4096:
+            raise ValueError("fish_max_new_tokens must be between 64 and 4096")
         if not 120 <= self.tts_rate <= 350:
             raise ValueError("tts_rate must be between 120 and 350")
         if not 5 <= self.tts_timeout_seconds <= 600:
@@ -117,6 +179,29 @@ class Config:
             raise ValueError("max_tts_chars must be between 100 and 16000")
         if not 0 <= self.temperature <= 2:
             raise ValueError("temperature must be between 0 and 2")
+        # TLS: certificate and key are all-or-nothing. Paths may be absolute or
+        # relative; reject control characters but do not require the files to
+        # exist at validation time (they are read when the socket is wrapped).
+        for label, value in (("tls_cert", self.tls_cert), ("tls_key", self.tls_key)):
+            if value and not re.fullmatch(r"[^\x00-\x1f\x7f]{1,4096}", value):
+                raise ValueError(f"{label} is invalid")
+        if bool(self.tls_cert) != bool(self.tls_key):
+            raise ValueError("tls_cert and tls_key must be set together")
+        # Auth: when enabled, a username plus a well-formed PBKDF2 digest and salt
+        # are required. Hash is SHA-256 (64 hex chars); salt is 16+ bytes of hex.
+        if type(self.auth_enabled) is not bool:
+            raise ValueError("auth_enabled must be a boolean")
+        if not 50_000 <= self.auth_pbkdf2_iterations <= 5_000_000:
+            raise ValueError("auth_pbkdf2_iterations must be between 50000 and 5000000")
+        if self.auth_enabled:
+            if not re.fullmatch(r"[A-Za-z0-9._@-]{1,64}", self.auth_username):
+                raise ValueError("auth_username is invalid")
+            if not re.fullmatch(r"[0-9a-f]{64}", self.auth_password_hash):
+                raise ValueError("auth_password_hash must be 64 lowercase hex characters")
+            if not re.fullmatch(r"[0-9a-f]{32,128}", self.auth_password_salt):
+                raise ValueError("auth_password_salt must be 32-128 lowercase hex characters")
+        if self.tts_playback not in ("host", "browser"):
+            raise ValueError("tts_playback must be 'host' or 'browser'")
         return self
 
 

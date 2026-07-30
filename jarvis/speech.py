@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +19,20 @@ ROOT = Path(__file__).resolve().parent.parent
 SAY = Path("/usr/bin/say")
 AFPLAY = Path("/usr/bin/afplay")
 PIPER_SYNTHESIZE = ROOT / "scripts" / "piper_synthesize.py"
+# Fish (OpenAudio S1-mini) runs as a resident HTTP server holding the model,
+# the same shape as the llama.cpp backend. JARVIS never handles the reference
+# audio: it names a server-side voice by id, so reply text is the only payload
+# and it stays on loopback. The neural voice ignores the WPM rate control.
+FISH_TTS_PATH = "/v1/tts"
+FISH_HEALTH_PATH = "/v1/health"
+FISH_LOCALE = "en_GB"
+FISH_HEALTH_TIMEOUT = 2.0
+FISH_HEALTH_TTL = 3.0
+# Fish generation blocks its (single-threaded) event loop, so a health probe can
+# time out while it is merely BUSY rendering. It is a resident server: if it was
+# healthy within this grace window, treat a probe failure as "busy, still up"
+# rather than "down", so rapid back-to-back renders in one reply are not rejected.
+FISH_HEALTH_GRACE = 45.0
 SPEECH_RATE_MIN = 120
 SPEECH_RATE_MAX = 350
 # Piper controls speed through a length scale (1.0 == normal). The configured
@@ -73,11 +89,28 @@ def _say_runtime_ready() -> bool:
     return SAY.is_file() and os.access(SAY, os.X_OK)
 
 
+def _afplay_ready() -> bool:
+    return AFPLAY.is_file() and os.access(AFPLAY, os.X_OK)
+
+
+def _playback_ready(config: Config) -> bool:
+    """Whether synthesized audio can actually reach a listener.
+
+    In host playback mode the audio is played on this machine through afplay, so
+    afplay must be present. In browser playback mode the rendered WAV is returned
+    to the web client, which plays it, so no host audio device is required — this
+    is what lets the headless LAN server (no afplay) still speak.
+    """
+    if config.tts_playback == "host":
+        return _afplay_ready()
+    return True
+
+
 def runtime_ready(config: Config) -> bool:
     """True when at least one speech engine can synthesize."""
     if not config.tts_enabled:
         return False
-    return _say_runtime_ready() or _piper_runtime_ready(config)
+    return _say_runtime_ready() or _piper_runtime_ready(config) or _fish_runtime_ready(config)
 
 
 def _piper_runtime_ready(config: Config) -> bool:
@@ -88,9 +121,65 @@ def _piper_runtime_ready(config: Config) -> bool:
         and os.access(interpreter, os.X_OK)
         and PIPER_SYNTHESIZE.is_file()
         and model.is_file()
-        and AFPLAY.is_file()
-        and os.access(AFPLAY, os.X_OK)
+        and _playback_ready(config)
     )
+
+
+_fish_health_lock = threading.Lock()
+# (expiry_monotonic, base_url, ok). A short-lived cache so listing voices during
+# one user action does not re-probe the server on every helper call.
+_fish_health: tuple[float, str, bool] | None = None
+# Monotonic time of the last successful probe, per base_url, for the grace window.
+_fish_last_ok: tuple[str, float] | None = None
+
+
+def _fish_server_healthy(config: Config) -> bool:
+    global _fish_health, _fish_last_ok
+    now = time.monotonic()
+    with _fish_health_lock:
+        if _fish_health is not None:
+            expiry, url, ok = _fish_health
+            if url == config.fish_base_url and now < expiry:
+                return ok
+    ok = False
+    try:
+        request = urllib.request.Request(config.fish_base_url + FISH_HEALTH_PATH, method="GET")
+        with urllib.request.urlopen(request, timeout=FISH_HEALTH_TIMEOUT) as response:
+            ok = 200 <= getattr(response, "status", response.getcode()) < 300
+    except (urllib.error.URLError, OSError, ValueError):
+        ok = False
+    with _fish_health_lock:
+        if ok:
+            _fish_last_ok = (config.fish_base_url, now)
+            _fish_health = (now + FISH_HEALTH_TTL, config.fish_base_url, True)
+            return True
+        # Probe failed. If the server answered healthy within the grace window it
+        # is almost certainly just busy rendering (its event loop is blocked), not
+        # down — keep reporting healthy briefly so back-to-back renders in one
+        # reply are not rejected. Only after a sustained outage do we report down.
+        if (
+            _fish_last_ok is not None
+            and _fish_last_ok[0] == config.fish_base_url
+            and now - _fish_last_ok[1] < FISH_HEALTH_GRACE
+        ):
+            _fish_health = (now + FISH_HEALTH_TTL, config.fish_base_url, True)
+            return True
+        _fish_health = (now + FISH_HEALTH_TTL, config.fish_base_url, False)
+        return False
+
+
+def _fish_runtime_ready(config: Config) -> bool:
+    """True when the Fish server is reachable and its audio can be played.
+
+    Fish is offered on the same terms as Piper: disabled by default, and only
+    advertised when a voice it produces can actually reach a listener — through
+    afplay in host mode, or the web client in browser mode.
+    """
+    if not config.fish_enabled:
+        return False
+    if not _playback_ready(config):
+        return False
+    return _fish_server_healthy(config)
 
 
 def parse_installed_voices(value: str) -> tuple[dict[str, str], ...]:
@@ -144,6 +233,10 @@ def piper_voice_entry(config: Config) -> dict[str, str]:
     return {"name": config.piper_voice_name, "locale": piper_locale(config), "engine": "piper"}
 
 
+def fish_voice_entry(config: Config) -> dict[str, str]:
+    return {"name": config.fish_voice_name, "locale": FISH_LOCALE, "engine": "fish"}
+
+
 def available_voices(config: Config) -> tuple[dict[str, str], ...]:
     """Every voice that can be spoken right now, each tagged with its engine.
 
@@ -163,6 +256,11 @@ def available_voices(config: Config) -> tuple[dict[str, str], ...]:
         if any(voice["name"] == piper["name"] for voice in voices):
             piper = dict(piper, name=f"{piper['name']} (Piper)")
         voices.append(piper)
+    if _fish_runtime_ready(config):
+        fish = fish_voice_entry(config)
+        if any(voice["name"] == fish["name"] for voice in voices):
+            fish = dict(fish, name=f"{fish['name']} (Fish)")
+        voices.append(fish)
     return tuple(voices)
 
 
@@ -173,8 +271,6 @@ def voice_engine(config: Config, voice: str) -> str:
     unenumerable voice list degrades to `say` instead of failing. Selection of an
     invalid voice is rejected separately by resolve_speech_options.
     """
-    if not _piper_runtime_ready(config):
-        return "say"
     for entry in available_voices(config):
         if entry["name"] == voice:
             return entry["engine"]
@@ -185,12 +281,18 @@ def default_voice(config: Config) -> str:
     """The configured default, falling back to any available voice."""
     voices = available_voices(config)
     names = {voice["name"] for voice in voices}
-    preferred = config.piper_voice_name if config.tts_engine == "piper" else config.tts_voice
+    preferred_by_engine = {
+        "fish": config.fish_voice_name,
+        "piper": config.piper_voice_name,
+        "say": config.tts_voice,
+    }
+    preferred = preferred_by_engine.get(config.tts_engine, config.tts_voice)
     if preferred in names:
         return preferred
-    fallback = config.tts_voice if config.tts_engine == "piper" else config.piper_voice_name
-    if fallback in names:
-        return fallback
+    # Prefer a still-usable configured voice over naming one that cannot speak.
+    for fallback in (config.fish_voice_name, config.piper_voice_name, config.tts_voice):
+        if fallback in names:
+            return fallback
     return voices[0]["name"] if voices else preferred
 
 
@@ -377,16 +479,93 @@ def speak(
     *,
     voice: object = None,
     rate: object = None,
+    fish_options: object = None,
 ) -> None:
     if not runtime_ready(config):
         raise SpeechError("speech synthesis is unavailable")
     text = validate_text(value, config.max_tts_chars)
     selected_voice, selected_rate = resolve_speech_options(config, voice, rate)
     prepared = prepare_speech_text(text, word_pronunciations)
-    if voice_engine(config, selected_voice) == "piper":
+    engine = voice_engine(config, selected_voice)
+    if engine == "piper":
         _speak_piper(config, prepared, selected_rate)
+    elif engine == "fish":
+        _speak_fish(config, prepared, resolve_fish_options(config, fish_options))
     else:
         _speak_say(config, prepared, selected_voice, selected_rate)
+
+
+def render_audio(
+    config: Config,
+    value: object,
+    word_pronunciations: tuple[str, ...] = (),
+    *,
+    voice: object = None,
+    rate: object = None,
+    fish_options: object = None,
+) -> bytes:
+    """Synthesize a phrase to WAV bytes without playing it on this host.
+
+    This is the browser-playback path: the server returns the audio to the web
+    client, which plays it on whatever LAN device is talking to JARVIS. Ordering
+    and interruption are handled client-side (the browser queues and can stop the
+    audio), so no server-side channel claim is taken here — unlike the host
+    playback path, which owns a single afplay channel.
+    """
+    if not runtime_ready(config):
+        raise SpeechError("speech synthesis is unavailable")
+    text = validate_text(value, config.max_tts_chars)
+    selected_voice, selected_rate = resolve_speech_options(config, voice, rate)
+    prepared = prepare_speech_text(text, word_pronunciations)
+    engine = voice_engine(config, selected_voice)
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="jarvis-tts-", suffix=".wav", delete=False) as handle:
+            temp_path = handle.name
+        if engine == "piper":
+            _render_piper(config, prepared, temp_path, length_scale_for_rate(selected_rate))
+        elif engine == "fish":
+            _render_fish(config, prepared, temp_path, resolve_fish_options(config, fish_options))
+        else:
+            _render_say(config, prepared, selected_voice, selected_rate, temp_path)
+        with open(temp_path, "rb") as handle:
+            audio = handle.read()
+        # Guard against an engine that produced an empty or non-WAV file rather
+        # than returning a truncated payload to the client.
+        if not audio.startswith(b"RIFF"):
+            raise SpeechError("speech synthesis failed")
+        return audio
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+
+
+def _render_say(config: Config, prepared: str, selected_voice: str, selected_rate: int, output_path: str) -> None:
+    """Render one phrase with macOS `say` to a WAV file instead of playing it.
+
+    The utterance travels on standard input so it never appears in an argument
+    vector, matching the host-playback path.
+    """
+    try:
+        result = subprocess.run(
+            [
+                str(SAY), "-v", selected_voice, "-r", str(selected_rate),
+                "-o", output_path, "--file-format=WAVE", "--data-format=LEI16@22050",
+            ],
+            input=prepared.encode("utf-8"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=config.tts_timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SpeechError("speech synthesis timed out") from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SpeechError("speech synthesis failed") from exc
+    if result.returncode != 0:
+        raise SpeechError("speech synthesis failed")
 
 
 def _speak_say(config: Config, prepared: str, selected_voice: str, selected_rate: int) -> None:
@@ -443,6 +622,172 @@ def _speak_piper(config: Config, prepared: str, selected_rate: int) -> None:
         with _lock:
             generation = _claim()
         _render_piper(config, prepared, temp_path, length_scale)
+        _play_audio(config, temp_path, generation)
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+
+
+# Per-request Fish tuning bounds, kept in lockstep with Config.validate(). A
+# client may override any subset; unspecified parameters fall back to the config
+# defaults. max_new_tokens is an integer; the rest are floats.
+# These MUST stay within Fish's own ServeTTSRequest limits (fish_speech schema):
+# temperature 0.1-1.0, top_p 0.1-1.0, repetition_penalty 0.9-2.0. Exceeding them
+# makes Fish reject the request (422) and speech fails silently.
+FISH_OPTION_BOUNDS = {
+    "temperature": (0.1, 1.0),
+    "top_p": (0.1, 1.0),
+    "repetition_penalty": (0.9, 2.0),
+    "max_new_tokens": (64, 4096),
+}
+
+
+def resolve_fish_options(config: Config, overrides: object = None) -> dict:
+    """Merge validated per-request Fish overrides over the configured defaults.
+
+    Returns the effective parameter set. Raises SpeechError on any malformed or
+    out-of-range value so a bad client request cannot reach the Fish server.
+    """
+    values = {
+        "temperature": config.fish_temperature,
+        "top_p": config.fish_top_p,
+        "repetition_penalty": config.fish_repetition_penalty,
+        "max_new_tokens": config.fish_max_new_tokens,
+    }
+    if overrides is None:
+        return values
+    if not isinstance(overrides, dict):
+        raise SpeechError("speech options are invalid")
+    for key, value in overrides.items():
+        if key not in FISH_OPTION_BOUNDS:
+            raise SpeechError("speech options are invalid")
+        low, high = FISH_OPTION_BOUNDS[key]
+        if key == "max_new_tokens":
+            if type(value) is not int or not low <= value <= high:
+                raise SpeechError("speech options are invalid")
+            values[key] = value
+        else:
+            if type(value) not in (int, float) or not low <= float(value) <= high:
+                raise SpeechError("speech options are invalid")
+            if key == "top_p" and float(value) <= 0:
+                raise SpeechError("speech options are invalid")
+            values[key] = float(value)
+    return values
+
+
+def _render_fish(config: Config, text: str, output_path: str, options: dict | None = None) -> None:
+    """Render one phrase through the resident Fish server into a WAV file.
+
+    Only reply text and a server-side voice id leave this process, over loopback
+    HTTP. The reference audio and its transcript live with the Fish server.
+    """
+    opts = options if options is not None else resolve_fish_options(config)
+    payload = json.dumps(
+        {
+            "text": text,
+            "reference_id": config.fish_reference_id,
+            "format": "wav",
+            "temperature": opts["temperature"],
+            "top_p": opts["top_p"],
+            "repetition_penalty": opts["repetition_penalty"],
+            "max_new_tokens": opts["max_new_tokens"],
+            "use_memory_cache": "on",
+            "streaming": False,
+            "normalize": True,
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        config.fish_base_url + FISH_TTS_PATH,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=config.tts_timeout_seconds) as response:
+            audio = response.read()
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise SpeechError("speech synthesis failed") from exc
+    # A structured error comes back as JSON, not audio; refuse to write it as WAV.
+    if not audio.startswith(b"RIFF"):
+        raise SpeechError("speech synthesis failed")
+    with open(output_path, "wb") as handle:
+        handle.write(audio)
+
+
+def stream_fish_audio(
+    config: Config,
+    value: object,
+    word_pronunciations: tuple[str, ...] = (),
+    *,
+    voice: object = None,
+    rate: object = None,
+    fish_options: object = None,
+):
+    """Yield a WAV stream (header, then int16 PCM chunks) as Fish generates it.
+
+    Only valid for a Fish voice. The connection to Fish is opened eagerly so a
+    failure raises here — before the caller streams any bytes to the client — and
+    the response is read incrementally so audio can start playing early.
+    """
+    if not runtime_ready(config):
+        raise SpeechError("speech synthesis is unavailable")
+    text = validate_text(value, config.max_tts_chars)
+    selected_voice, _ = resolve_speech_options(config, voice, rate)
+    if voice_engine(config, selected_voice) != "fish":
+        raise SpeechError("streaming requires a neural voice")
+    prepared = prepare_speech_text(text, word_pronunciations)
+    opts = resolve_fish_options(config, fish_options)
+    payload = json.dumps(
+        {
+            "text": prepared,
+            "reference_id": config.fish_reference_id,
+            "format": "wav",
+            "temperature": opts["temperature"],
+            "top_p": opts["top_p"],
+            "repetition_penalty": opts["repetition_penalty"],
+            "max_new_tokens": opts["max_new_tokens"],
+            "use_memory_cache": "on",
+            "streaming": True,
+            "normalize": True,
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        config.fish_base_url + FISH_TTS_PATH,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        response = urllib.request.urlopen(request, timeout=config.tts_timeout_seconds)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise SpeechError("speech synthesis failed") from exc
+
+    def _chunks():
+        try:
+            while True:
+                chunk = response.read(8192)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            response.close()
+
+    return _chunks()
+
+
+def _speak_fish(config: Config, prepared: str, options: dict | None = None) -> None:
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="jarvis-tts-", suffix=".wav", delete=False) as handle:
+            temp_path = handle.name
+        # Claim before rendering so a stop arriving during the network render is
+        # detected before playback starts, matching the Piper path.
+        with _lock:
+            generation = _claim()
+        _render_fish(config, prepared, temp_path, options)
         _play_audio(config, temp_path, generation)
     finally:
         if temp_path:

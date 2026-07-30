@@ -6,13 +6,13 @@ This directory is the standalone GitHub repository boundary. Downloaded runtimes
 
 ## Safety boundary
 
-- Both the model server and application bind to IPv4 loopback only.
+- The model server (llama.cpp) and the Fish TTS server always bind to IPv4 loopback only; only reply text reaches them, over loopback. The web application binds to loopback by default. Exposing the web application on the private LAN is opt-in and gated (see "Private-LAN hosting" below): a non-loopback bind is refused by configuration unless TLS and authentication are both configured.
 - Browser conversations stay in page memory and are not written as transcripts. Separately, Automatic memory may retain likely durable user-authored facts in the bounded local memory ledger; uncertain or conflicting items require approval.
 - Recent context is bounded to complete alternating turns within 20 messages and 12,000 characters. Failed or incomplete generations are not retained in context.
 - Historical assistant-role suggestions are treated as proposals; creative facts become established only when stated or explicitly approved by the user.
 - Explicit user spelling corrections are extracted from the bounded conversation, retained only in memory, and supplied to the model as exact-character constraints. JARVIS does not infer spellings that the user did not explicitly provide.
 - The application logs request metadata, never prompts or responses.
-- No external tools, wake word, remote access, telemetry, or cloud fallback are present.
+- No external tools, wake word, telemetry, or cloud fallback are present. Remote access off the home network is not built in; private-LAN hosting (below) is confined to the local network behind TLS, authentication, and a device-scoped firewall rule.
 - Persistent memory is local, bounded, user-visible, editable, and removable. It rejects common credential/financial-secret categories and never extracts facts from assistant output.
 - Reminder, timer, and alarm requests receive a deterministic local refusal while those tools are unavailable; JARVIS never pretends an alert was scheduled.
 - This alpha is English-only. Unexpected non-English-script model drift is rejected and the turn is removed from retained context.
@@ -21,6 +21,20 @@ This directory is the standalone GitHub repository boundary. Downloaded runtimes
 - The proxy authenticates to llama.cpp with a generated, ignored, owner-readable runtime key.
 
 This is an alpha, not a security boundary against other software already running as the same local user.
+
+## Private-LAN hosting (optional)
+
+The default posture is loopback-only. JARVIS can instead be hosted on one machine and used privately from other devices on the home network. This is opt-in and protected by a configuration interlock: `config.local.json` refuses to start with a non-loopback `app_host` (for example `0.0.0.0`) unless **both** TLS and authentication are configured, so the box cannot be exposed insecurely by misconfiguration. The llama.cpp and Fish TTS servers remain loopback-only regardless.
+
+To enable it:
+
+1. **TLS** — browsers require HTTPS before granting microphone access to a non-localhost origin. Generate a self-signed certificate covering the server's LAN address with `scripts/make_tls_cert.sh 192.168.x.y`, then set `tls_cert` and `tls_key` in `config.local.json`. Import the certificate into each client's trust store (or accept the one-time warning).
+2. **Authentication** — generate HTTP Basic credentials with `python3 scripts/make_auth.py` and paste the printed `auth_*` keys into `config.local.json`. Only a salted PBKDF2-HMAC-SHA256 digest is stored; the server compares it in constant time and never persists the password.
+3. **Bind** — set `app_host` to `0.0.0.0` (or a specific LAN interface IP) and choose a port.
+4. **Firewall** — add a rule scoping the chosen port to your own devices; do not open it to the internet.
+5. **Browser audio** — set `tts_playback` to `"browser"` so a headless server (which has no audio output of its own) returns each rendered reply to the client, which plays it locally. Leave it `"host"` for local development on a machine with speakers.
+
+With TLS enabled the app is served over `https://`. See `docs/SERVER_BUILD_PROGRESS.md` for the server build and the end-to-end LAN checklist.
 
 ## Selected baseline
 

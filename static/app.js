@@ -42,6 +42,16 @@ const speechDefaultsEl = document.querySelector('#speech-defaults');
 const speechPreviewEl = document.querySelector('#speech-preview');
 const speechSettingsSaveEl = document.querySelector('#speech-settings-save');
 const speechSettingsStatusEl = document.querySelector('#speech-settings-status');
+const fishTuningEl = document.querySelector('#fish-tuning');
+const speechStreamEl = document.querySelector('#speech-stream');
+// Each Fish parameter maps to a slider + a value readout, keyed by the exact
+// server-side parameter name so overrides can be sent through verbatim.
+const fishControls = {
+  temperature: {input: document.querySelector('#fish-temperature'), value: document.querySelector('#fish-temperature-value'), integer: false},
+  top_p: {input: document.querySelector('#fish-top-p'), value: document.querySelector('#fish-top-p-value'), integer: false},
+  repetition_penalty: {input: document.querySelector('#fish-repetition-penalty'), value: document.querySelector('#fish-repetition-penalty-value'), integer: false},
+  max_new_tokens: {input: document.querySelector('#fish-max-tokens'), value: document.querySelector('#fish-max-tokens-value'), integer: true},
+};
 const {
   countUnsupportedScriptCharacters,
   formatConversationTranscript,
@@ -64,8 +74,33 @@ let speechReady = false;
 let speechEnabled = true;
 let speechActive = false;
 let speechRequestId = 0;
+// Two chains so rendering can run ahead of playback (browser mode). speechQueue
+// serializes PLAYBACK (clips play strictly in order); speechRenderChain serializes
+// the fetch/render of each sentence's audio, one Fish render at a time. Because the
+// render chain advances independently of playback, sentence N+1 is already being
+// rendered while sentence N is still speaking, so its audio is usually buffered and
+// ready the instant N ends — removing the render-latency gap between sentences.
 let speechQueue = Promise.resolve();
+let speechRenderChain = Promise.resolve();
 const pendingSpeech = new Set();
+// Where reply audio is played. 'host' means the server plays it (local dev on a
+// machine with audio output); 'browser' means the server returns the rendered
+// WAV and this client plays it — the model for the headless LAN server. Set from
+// /api/health. currentAudio holds the element playing in browser mode so a stop
+// can silence it immediately.
+let playbackMode = 'host';
+let currentAudio = null;
+// Low-latency streaming playback for the neural (Fish) voice: audio is scheduled
+// through a Web Audio context as raw PCM arrives, so speech starts ~0.3s in
+// instead of after the whole sentence renders. Toggleable; falls back to the blob
+// path on any failure. streamState tracks the in-flight stream so a stop can end it.
+let streamingEnabled = storedSpeechSetting('jarvis.speech.stream') !== '0';
+let audioCtx = null;
+let streamState = null;
+// Shared Web Audio scheduling cursor (in AudioContext time) spanning all the
+// sentences of one reply, so chunks — even across sentence boundaries — play
+// back-to-back with no gap, while the next sentence is generated ahead of time.
+let streamClock = 0;
 let conversationEnabled = false;
 let conversationStarting = false;
 let conversationAudio = null;
@@ -84,6 +119,11 @@ let learnSavedCount = 0;
 let speechOptionsReady = false;
 let speechOptionsLoading = false;
 let speechOptions = null;
+// Fish parameter metadata (ranges + configured defaults) from /api/speech/options,
+// and the current per-browser values sent as overrides. Null until a Fish voice
+// is available.
+let fishMeta = null;
+let fishParams = null;
 let speechOverridden = false;
 let speechVoice = null;
 let speechRate = null;
@@ -137,6 +177,7 @@ function deliverLocalResponse(userText, responseText, speechMessage) {
   if (speechEnabled && speechReady) {
     const requestId = ++speechRequestId;
     speechQueue = Promise.resolve();
+    speechRenderChain = Promise.resolve();
     queueSpeech(responseText, requestId, speechMessage);
   }
   return true;
@@ -180,8 +221,171 @@ function speechIdleMessage() {
 }
 
 function speechPayload(text, voice = speechVoice, rate = speechRate) {
-  if (typeof voice !== 'string' || !Number.isInteger(rate)) return {text};
-  return {text, voice, rate};
+  const payload = (typeof voice === 'string' && Number.isInteger(rate)) ? {text, voice, rate} : {text};
+  // Attach live Fish tuning only when the target voice is a Fish voice, and only
+  // finite values — a stray NaN would serialize to null and the server would
+  // (correctly) reject the whole request, silencing speech. Omitted params fall
+  // back to the server defaults.
+  if (fishParams && voiceEngineOf(voice) === 'fish') {
+    const fish = {};
+    for (const key of Object.keys(fishParams)) {
+      if (Number.isFinite(fishParams[key])) fish[key] = fishParams[key];
+    }
+    if (Object.keys(fish).length) payload.fish = fish;
+  }
+  return payload;
+}
+
+// Play one rendered phrase in browser mode and resolve when it finishes, so the
+// speech queue serializes playback the same way host mode serializes afplay. A
+// superseding stop (a newer requestId) drops the phrase without playing it.
+function playBrowserAudio(blob, requestId) {
+  return new Promise((resolve) => {
+    if (requestId !== speechRequestId) { resolve(); return; }
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    currentAudio = audio;
+    let settled = false;
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      try { URL.revokeObjectURL(url); } catch { /* url already released */ }
+      if (currentAudio === audio) currentAudio = null;
+      resolve();
+    };
+    audio.onended = cleanup;
+    audio.onerror = cleanup;
+    audio.play().catch(cleanup);
+  });
+}
+
+function stopBrowserAudio() {
+  if (currentAudio) {
+    try { currentAudio.pause(); currentAudio.src = ''; } catch { /* element already torn down */ }
+    currentAudio = null;
+  }
+  if (streamState) {
+    streamState.stopped = true;
+    for (const reader of streamState.readers) { try { reader.cancel(); } catch { /* already closed */ } }
+    streamState.readers.clear();
+    for (const source of streamState.sources) { try { source.stop(); } catch { /* already stopped */ } }
+    streamState.sources.clear();
+    streamState = null;
+  }
+  streamClock = 0;
+}
+
+// Stream one sentence of raw int16 PCM (mono, 44.1 kHz) from Fish and schedule
+// each chunk onto the shared clock. Resolves when GENERATION finishes (the reader
+// drains) — NOT when playback finishes — so the caller's queue can immediately
+// start generating the next sentence while this one is still playing out. Audio
+// keeps playing via the scheduled buffer sources. Returns false (without playing)
+// if streaming can't be used, so the caller can fall back to the blob path.
+const FISH_STREAM_SAMPLE_RATE = 44100;
+async function streamFishSentence(payload, requestId) {
+  const ctx = getAudioContext();
+  if (!ctx) return false;
+  let response;
+  try {
+    response = await fetch('/api/speak/stream', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+  } catch { return false; }
+  if (!response.ok || !response.body) return false;
+  if (requestId !== speechRequestId) { try { await response.body.cancel(); } catch { /* ignore */ } return true; }
+
+  if (!streamState) streamState = {readers: new Set(), sources: new Set(), stopped: false};
+  const state = streamState;
+  const reader = response.body.getReader();
+  state.readers.add(reader);
+  // Continue the shared clock. If playback has caught up (first sentence, or the
+  // generator fell behind), start just ahead of now; otherwise append seamlessly.
+  if (streamClock < ctx.currentTime + 0.05) streamClock = ctx.currentTime + 0.10;
+  let leftover = null;  // carries a trailing odd byte between network chunks
+  try {
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      if (state.stopped || requestId !== speechRequestId) break;
+      let bytes = value;
+      if (leftover) {
+        const merged = new Uint8Array(leftover.length + bytes.length);
+        merged.set(leftover); merged.set(bytes, leftover.length);
+        bytes = merged; leftover = null;
+      }
+      if (bytes.length % 2 === 1) { leftover = bytes.slice(bytes.length - 1); bytes = bytes.slice(0, bytes.length - 1); }
+      if (bytes.length === 0) continue;
+      const aligned = new Uint8Array(bytes);  // fresh buffer, byteOffset 0, even length
+      const samples = new Int16Array(aligned.buffer, 0, aligned.length >> 1);
+      const channel = new Float32Array(samples.length);
+      for (let i = 0; i < samples.length; i++) channel[i] = samples[i] / 32768;
+      const buffer = ctx.createBuffer(1, channel.length, FISH_STREAM_SAMPLE_RATE);
+      buffer.getChannelData(0).set(channel);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      const startAt = Math.max(streamClock, ctx.currentTime);
+      source.start(startAt);
+      streamClock = startAt + buffer.duration;
+      state.sources.add(source);
+      source.onended = () => state.sources.delete(source);
+    }
+  } catch { /* stream error: stop scheduling; queue continues */ }
+  state.readers.delete(reader);
+  return true;  // generation done; scheduled audio plays on independently
+}
+
+// Lead-in buffer: before the FIRST clip of a reply plays, wait briefly so the
+// render pipeline can get ahead and build a small backlog of ready clips. That
+// backlog absorbs the case where a short sentence finishes speaking before the
+// next sentence has finished rendering, which is what caused the residual gaps.
+// Keyed by requestId so it applies once per reply. Tunable. Kept modest so it
+// buffers short-sentence gaps without adding much to time-to-first-word; the
+// render pipeline (which runs ahead during playback) does most of the smoothing.
+const SPEECH_LEAD_IN_MS = 600;
+let speechLeadInDoneFor = -1;
+
+// Browsers block programmatic audio that isn't tied to a recent user gesture. The
+// first reply plays seconds after the send gesture (after rendering), by which
+// point that activation has lapsed, so it would be silently refused. Playing a
+// muted, one-frame WAV during the user's first interaction grants the page sticky
+// media activation, so every later Audio.play() (including delayed ones) works.
+let audioUnlocked = false;
+
+function silentWavBlob() {
+  const buf = new ArrayBuffer(46);
+  const view = new DataView(buf);
+  const tag = (offset, text) => { for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i)); };
+  tag(0, 'RIFF'); view.setUint32(4, 38, true); tag(8, 'WAVE');
+  tag(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, 8000, true); view.setUint32(28, 16000, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  tag(36, 'data'); view.setUint32(40, 2, true); // one 16-bit sample of silence (already zero)
+  return new Blob([buf], {type: 'audio/wav'});
+}
+
+function getAudioContext() {
+  if (!audioCtx) {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return null;
+    try { audioCtx = new Ctor(); } catch { audioCtx = null; return null; }
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => { /* resumes on next gesture */ });
+  return audioCtx;
+}
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  getAudioContext();  // create + resume the Web Audio context within the gesture
+  try {
+    const url = URL.createObjectURL(silentWavBlob());
+    const audio = new Audio(url);
+    audio.volume = 0;
+    const done = () => { try { URL.revokeObjectURL(url); } catch { /* already released */ } };
+    audio.play().then(() => { audio.pause(); done(); }).catch(done);
+  } catch { /* best-effort; real playback will still try */ }
 }
 
 function storedSpeechSetting(key) {
@@ -284,9 +488,10 @@ async function loadSpeechOptions() {
     const response = await fetch('/api/speech/options', {cache: 'no-store'});
     const payload = await response.json();
     if (!response.ok || !Array.isArray(payload.voices) || !payload.voices.length) throw new Error('speech options unavailable');
+    const knownEngine = (engine) => (engine === 'piper' || engine === 'fish' ? engine : 'say');
     const voices = payload.voices
       .filter((item) => item && typeof item.name === 'string' && typeof item.locale === 'string')
-      .map((item) => ({name: item.name, locale: item.locale, engine: item.engine === 'piper' ? 'piper' : 'say'}));
+      .map((item) => ({name: item.name, locale: item.locale, engine: knownEngine(item.engine)}));
     if (!voices.length) throw new Error('speech options unavailable');
     const minimumRate = Number.isInteger(payload.minimum_rate) ? payload.minimum_rate : 120;
     const maximumRate = Number.isInteger(payload.maximum_rate) ? payload.maximum_rate : 350;
@@ -313,7 +518,7 @@ async function loadSpeechOptions() {
       option.value = item.name;
       // The engine is visible so a neural voice can be compared against a
       // built-in one without guessing which is which.
-      const engine = item.engine === 'piper' ? 'neural' : 'built-in';
+      const engine = item.engine === 'piper' || item.engine === 'fish' ? 'neural' : 'built-in';
       option.textContent = `${item.name} (${item.locale.replace('_', '-')}, ${engine})`;
       speechVoiceEl.appendChild(option);
     }
@@ -321,8 +526,9 @@ async function loadSpeechOptions() {
     speechRateEl.min = String(minimumRate);
     speechRateEl.max = String(maximumRate);
     speechRateEl.value = String(speechRate);
+    initFishTuning(payload.fish);
     speechOptionsReady = true;
-    const neural = voices.filter((item) => item.engine === 'piper').length;
+    const neural = voices.filter((item) => item.engine === 'piper' || item.engine === 'fish').length;
     const inventory = neural
       ? `${voices.length} voices are available, including ${neural} neural.`
       : `${voices.length} installed English voices are available.`;
@@ -345,6 +551,7 @@ async function openSpeechSettings() {
   if (!memoryBackdropEl.hidden) closeMemoryPanel();
   speechVoiceEl.value = speechVoice;
   speechRateEl.value = String(speechRate);
+  updateFishTuningVisibility();
   speechSettingsBackdropEl.hidden = false;
   speechSettingsCloseEl.focus();
 }
@@ -352,6 +559,85 @@ async function openSpeechSettings() {
 function closeSpeechSettings() {
   speechSettingsBackdropEl.hidden = true;
   speechSettingsToggleEl.focus();
+}
+
+function fishStorageKey(name) {
+  return `jarvis.speech.fish.${name}`;
+}
+
+function clampFishValue(name, raw) {
+  const meta = fishMeta && fishMeta[name];
+  if (!meta) return null;
+  let value = fishControls[name].integer ? Number.parseInt(raw, 10) : Number.parseFloat(raw);
+  if (!Number.isFinite(value)) value = Number(meta.value);
+  if (!Number.isFinite(value)) return null;  // never emit NaN into fishParams
+  value = Math.min(meta.max, Math.max(meta.min, value));
+  return fishControls[name].integer ? Math.round(value) : value;
+}
+
+function formatFishValue(name, value) {
+  return fishControls[name].integer ? String(value) : value.toFixed(2);
+}
+
+function voiceEngineOf(name) {
+  const voice = speechOptions && speechOptions.voices.find((item) => item.name === name);
+  return voice ? voice.engine : 'say';
+}
+
+function updateFishTuningVisibility() {
+  if (!fishTuningEl) return;
+  fishTuningEl.hidden = !(Boolean(fishParams) && voiceEngineOf(speechVoiceEl.value) === 'fish');
+}
+
+// Build the tuning panel from server metadata, seeding each slider from a saved
+// per-browser value or the configured default. No-op (and hidden) when no Fish
+// voice is available, so built-in/Piper-only setups are unaffected.
+function initFishTuning(fish) {
+  if (!fish || fish.available !== true || !fish.parameters) {
+    fishMeta = null;
+    fishParams = null;
+    if (fishTuningEl) fishTuningEl.hidden = true;
+    return;
+  }
+  fishMeta = {};
+  fishParams = {};
+  for (const name of Object.keys(fishControls)) {
+    const meta = fish.parameters[name];
+    const control = fishControls[name];
+    if (!meta || !control.input || !Number.isFinite(meta.min) || !Number.isFinite(meta.max)) continue;
+    fishMeta[name] = {min: meta.min, max: meta.max, step: meta.step, value: meta.value};
+    control.input.min = String(meta.min);
+    control.input.max = String(meta.max);
+    control.input.step = String(meta.step);
+    const stored = clampFishValue(name, storedSpeechSetting(fishStorageKey(name)));
+    const value = stored === null ? clampFishValue(name, meta.value) : stored;
+    if (value === null) continue;  // unresolvable: leave to the server default
+    fishParams[name] = value;
+    control.input.value = String(value);
+    if (control.value) control.value.textContent = formatFishValue(name, value);
+  }
+  updateFishTuningVisibility();
+}
+
+function onFishParamInput(name) {
+  const control = fishControls[name];
+  const value = clampFishValue(name, control.input.value);
+  if (value === null || !fishParams) return;
+  fishParams[name] = value;
+  if (control.value) control.value.textContent = formatFishValue(name, value);
+  storeSpeechSetting(fishStorageKey(name), value);
+}
+
+function resetFishDefaults() {
+  if (!fishMeta || !fishParams) return;
+  for (const name of Object.keys(fishControls)) {
+    if (!fishMeta[name]) continue;
+    const value = clampFishValue(name, fishMeta[name].value);
+    fishParams[name] = value;
+    fishControls[name].input.value = String(value);
+    if (fishControls[name].value) fishControls[name].value.textContent = formatFishValue(name, value);
+    storeSpeechSetting(fishStorageKey(name), value);
+  }
 }
 
 function selectedSpeechSettings() {
@@ -371,9 +657,10 @@ async function previewSpeechSettings() {
   }
   speechPreviewEl.disabled = true;
   await stopSpeech();
+  const previewRequestId = speechRequestId;
   speechActive = true;
   stopSpeechEl.disabled = false;
-  speechSettingsStatusEl.textContent = 'Playing a local preview…';
+  speechSettingsStatusEl.textContent = 'Playing a preview…';
   try {
     const response = await fetch('/api/speak', {
       method: 'POST',
@@ -381,6 +668,10 @@ async function previewSpeechSettings() {
       body: JSON.stringify(speechPayload('At your service. Local speech settings are ready.', selected.voice, selected.rate)),
     });
     if (!response.ok) throw new Error('preview failed');
+    if (playbackMode === 'browser') {
+      const blob = await response.blob();
+      await playBrowserAudio(blob, previewRequestId);
+    }
     speechSettingsStatusEl.textContent = 'Preview complete. Save to use these settings for replies.';
   } catch {
     speechSettingsStatusEl.textContent = 'The local speech preview was unavailable.';
@@ -414,11 +705,16 @@ async function checkHealth() {
     if (speechReady && !speechOptionsReady) void loadSpeechOptions();
     speechToggleEl.textContent = speechEnabled ? 'Voice on' : 'Voice muted';
     speechToggleEl.setAttribute('aria-pressed', speechEnabled ? 'true' : 'false');
-    speechActive = Boolean(state.speaking) || pendingSpeech.size > 0;
+    playbackMode = state.playback === 'browser' ? 'browser' : 'host';
+    // In browser mode the server's own "speaking" flag stays false (no host
+    // channel is used), so local pending/playing state is the source of truth.
+    const streamPlaying = Boolean(audioCtx) && streamClock > audioCtx.currentTime;
+    const browserSpeaking = playbackMode === 'browser' && (pendingSpeech.size > 0 || currentAudio !== null || streamPlaying);
+    speechActive = Boolean(state.speaking) || pendingSpeech.size > 0 || browserSpeaking;
     stopSpeechEl.disabled = !speechActive;
     if (!speechReady) speechHintEl.textContent = 'Local speech is unavailable. Text and speech input still work.';
     else if (!speechEnabled) speechHintEl.textContent = 'JARVIS voice is muted.';
-    else if (speechActive) speechHintEl.textContent = 'JARVIS is speaking locally.';
+    else if (speechActive) speechHintEl.textContent = playbackMode === 'browser' ? 'JARVIS is speaking on this device.' : 'JARVIS is speaking locally.';
     else speechHintEl.textContent = speechIdleMessage();
     if (!speechReady && !speechSettingsBackdropEl.hidden) closeSpeechSettings();
     memoryReady = response.ok && state.memory === 'ready';
@@ -608,9 +904,51 @@ async function stopSpeech(message = '') {
   speechActive = false;
   pendingSpeech.clear();
   speechQueue = Promise.resolve();
+  speechRenderChain = Promise.resolve();
   stopSpeechEl.disabled = true;
+  // Silence browser-mode playback locally; the server call stops any host-mode
+  // afplay. Both run so a stop works regardless of the current playback mode.
+  stopBrowserAudio();
   try { await fetch('/api/speak/stop', {method: 'POST'}); } catch { /* health polling will report availability */ }
   if (message) speechHintEl.textContent = message;
+}
+
+function speakActiveStatus(requestId, activeMessage) {
+  if (requestId !== speechRequestId) return;
+  speechActive = true;
+  stopSpeechEl.disabled = false;
+  speechHintEl.textContent = activeMessage;
+}
+
+function speechTaskFailed(requestId) {
+  if (requestId === speechRequestId) speechHintEl.textContent = 'Speech was unavailable. The written reply will continue.';
+}
+
+function speechTaskSettled(requestId, pending) {
+  pendingSpeech.delete(pending);
+  if (pendingSpeech.size === 0 && requestId === speechRequestId) {
+    speechActive = false;
+    stopSpeechEl.disabled = true;
+    speechHintEl.textContent = speechIdleMessage();
+  }
+}
+
+// Streaming tasks resolve when a sentence finishes GENERATING, but its audio is
+// still playing out on the shared clock. When the last sentence's generation is
+// done, defer the return-to-idle until the scheduled audio has actually finished,
+// so the "speaking" state and Stop button stay accurate through the tail.
+function streamTaskSettled(requestId, pending) {
+  pendingSpeech.delete(pending);
+  if (pendingSpeech.size !== 0 || requestId !== speechRequestId) return;
+  const remainingMs = audioCtx ? Math.max(0, (streamClock - audioCtx.currentTime) * 1000) : 0;
+  setTimeout(() => {
+    if (requestId === speechRequestId && pendingSpeech.size === 0) {
+      speechActive = false;
+      stopSpeechEl.disabled = true;
+      speechHintEl.textContent = speechIdleMessage();
+      streamClock = 0;
+    }
+  }, remainingMs + 80);
 }
 
 function queueSpeech(text, requestId, activeMessage = 'JARVIS is speaking while the reply is generated.') {
@@ -618,28 +956,73 @@ function queueSpeech(text, requestId, activeMessage = 'JARVIS is speaking while 
   if (!spokenText || requestId !== speechRequestId) return;
   const pending = {};
   pendingSpeech.add(pending);
-  const task = speechQueue.then(async () => {
-    if (!speechEnabled || !speechReady || requestId !== speechRequestId) return;
-    speechActive = true;
-    stopSpeechEl.disabled = false;
-    speechHintEl.textContent = activeMessage;
-    const response = await fetch('/api/speak', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(speechPayload(spokenText)),
+  const requestSpeech = () => fetch('/api/speak', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(speechPayload(spokenText)),
+  });
+
+  if (playbackMode === 'browser' && streamingEnabled && voiceEngineOf(speechVoice) === 'fish') {
+    // Low-latency streaming path: each sentence is one progressive stream that
+    // starts playing almost immediately. Serialized on the play chain; on any
+    // failure it falls back to a one-off blob render so speech never just stops.
+    const task = speechQueue.then(async () => {
+      if (!speechEnabled || requestId !== speechRequestId) return;
+      speakActiveStatus(requestId, activeMessage);
+      const streamed = await streamFishSentence(speechPayload(spokenText), requestId);
+      if (streamed === false) {
+        const response = await requestSpeech();
+        if (!response.ok) throw new Error('speech failed');
+        if (requestId !== speechRequestId) return;
+        const blob = await response.blob();
+        await playBrowserAudio(blob, requestId);
+      }
     });
+    speechQueue = task.catch(() => speechTaskFailed(requestId)).finally(() => streamTaskSettled(requestId, pending));
+    return;
+  }
+
+  if (playbackMode === 'browser') {
+    // Render this sentence on the render chain (sequential, one Fish render at a
+    // time, preserving order) so it runs ahead while earlier sentences play.
+    const renderPromise = speechRenderChain.then(async () => {
+      // Do NOT gate on speechReady here: it is driven by the periodic health poll,
+      // which can briefly flip to unavailable while Fish is busy rendering. Gating
+      // on it would silently drop a mid-reply sentence. Stop/mute/newer-reply are
+      // still honored via speechEnabled and the requestId check; a genuine outage
+      // surfaces as a failed fetch below.
+      if (!speechEnabled || requestId !== speechRequestId) return null;
+      const response = await requestSpeech();
+      if (!response.ok) throw new Error('speech failed');
+      return await response.blob();
+    });
+    // A failed render must not stall later sentences' renders.
+    speechRenderChain = renderPromise.catch(() => null);
+    // Play in order: after the previous clip finishes AND this clip is rendered.
+    const task = Promise.all([speechQueue, renderPromise]).then(async ([, blob]) => {
+      if (!blob || !speechEnabled || requestId !== speechRequestId) return;
+      speakActiveStatus(requestId, activeMessage);
+      // Lead-in: delay only the first clip of this reply so a buffer forms behind it.
+      if (speechLeadInDoneFor !== requestId) {
+        speechLeadInDoneFor = requestId;
+        await new Promise((resolve) => setTimeout(resolve, SPEECH_LEAD_IN_MS));
+        if (requestId !== speechRequestId) return;
+      }
+      await playBrowserAudio(blob, requestId);
+    });
+    speechQueue = task.catch(() => speechTaskFailed(requestId)).finally(() => speechTaskSettled(requestId, pending));
+    return;
+  }
+
+  // Host mode: the server plays through afplay and /api/speak only returns once
+  // playback finishes, so requests must stay strictly serial (no rendering ahead).
+  const task = speechQueue.then(async () => {
+    if (!speechEnabled || requestId !== speechRequestId) return;
+    speakActiveStatus(requestId, activeMessage);
+    const response = await requestSpeech();
     if (!response.ok) throw new Error('speech failed');
   });
-  speechQueue = task.catch(() => {
-    if (requestId === speechRequestId) speechHintEl.textContent = 'Speech was unavailable. The written reply will continue.';
-  }).finally(() => {
-    pendingSpeech.delete(pending);
-    if (pendingSpeech.size === 0 && requestId === speechRequestId) {
-      speechActive = false;
-      stopSpeechEl.disabled = true;
-      speechHintEl.textContent = speechIdleMessage();
-    }
-  });
+  speechQueue = task.catch(() => speechTaskFailed(requestId)).finally(() => speechTaskSettled(requestId, pending));
 }
 
 function speechBoundary(text, final) {
@@ -1258,8 +1641,22 @@ speechDefaultsEl.addEventListener('click', () => {
   if (!speechOptions) return;
   speechVoiceEl.value = speechOptions.defaultVoice;
   speechRateEl.value = String(speechOptions.defaultRate);
+  resetFishDefaults();
+  updateFishTuningVisibility();
   speechSettingsStatusEl.textContent = 'Default settings selected. Save to apply them.';
 });
+speechVoiceEl.addEventListener('change', updateFishTuningVisibility);
+if (speechStreamEl) {
+  speechStreamEl.checked = streamingEnabled;
+  speechStreamEl.addEventListener('change', () => {
+    streamingEnabled = speechStreamEl.checked;
+    storeSpeechSetting('jarvis.speech.stream', streamingEnabled ? '1' : '0');
+  });
+}
+for (const name of Object.keys(fishControls)) {
+  const control = fishControls[name];
+  if (control.input) control.input.addEventListener('input', () => onFishParamInput(name));
+}
 speechPreviewEl.addEventListener('click', previewSpeechSettings);
 speechSettingsFormEl.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -1330,5 +1727,9 @@ window.addEventListener('pagehide', () => {
   discardRecording();
   void fetch('/api/speak/stop', {method: 'POST', keepalive: true}).catch(() => {});
 });
+// Unlock audio playback on the first real user interaction (typing counts), so the
+// first spoken reply isn't silently blocked by the browser's autoplay policy.
+document.addEventListener('pointerdown', unlockAudio, {once: true});
+document.addEventListener('keydown', unlockAudio, {once: true});
 checkHealth();
 setInterval(checkHealth, 5000);

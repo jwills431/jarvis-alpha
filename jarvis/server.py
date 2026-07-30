@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import re
+import ssl
 import sys
 import threading
 from http import HTTPStatus
@@ -59,10 +63,51 @@ ASSISTANT_OUTPUT_REQUEST = re.compile(
 )
 
 
+def _cert_path(value: str) -> str:
+    """Resolve a configured TLS path (absolute as-is, relative to the repo root)."""
+    path = Path(value)
+    return str(path if path.is_absolute() else ROOT / path)
+
+
+def verify_password(config: Config, password: str) -> bool:
+    """Constant-time PBKDF2 check of a candidate password against the stored digest."""
+    if not config.auth_password_hash or not config.auth_password_salt:
+        return False
+    try:
+        salt = bytes.fromhex(config.auth_password_salt)
+    except ValueError:
+        return False
+    derived = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, config.auth_pbkdf2_iterations
+    ).hex()
+    return hmac.compare_digest(derived, config.auth_password_hash)
+
+
+def check_basic_auth(config: Config, header: str | None) -> bool:
+    """Validate an HTTP Basic Authorization header. True when auth is disabled."""
+    if not config.auth_enabled:
+        return True
+    if not header or not header.startswith("Basic "):
+        return False
+    try:
+        raw = base64.b64decode(header[6:], validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    username, sep, password = raw.partition(":")
+    if not sep:
+        return False
+    # Always derive the password hash so a wrong username cannot be distinguished
+    # from a wrong password by response timing.
+    user_ok = hmac.compare_digest(username, config.auth_username)
+    pass_ok = verify_password(config, password)
+    return user_ok and pass_ok
+
+
 class JarvisServer(ThreadingHTTPServer):
     daemon_threads = True
-    # Permit an immediate foreground restart while the previous loopback socket
-    # is still in TIME_WAIT. The configured host remains validated as loopback.
+    # Permit an immediate foreground restart while the previous socket is still in
+    # TIME_WAIT. The configured host is validated as loopback, or as a LAN bind
+    # only behind the TLS + auth interlock (see Config.validate).
     allow_reuse_address = True
 
     def __init__(self, address: tuple[str, int], config: Config):
@@ -73,6 +118,14 @@ class JarvisServer(ThreadingHTTPServer):
         # The exact displayed spelling remains unchanged.
         self.tts_word_pronunciations: tuple[str, ...] = ()
         super().__init__(address, Handler)
+        if config.tls_enabled:
+            # Wrap the listening socket; accepted connections inherit TLS. Reading
+            # the key/cert here means a bad certificate fails at startup, not mid
+            # request. TLS is mandatory for any non-loopback (LAN) bind.
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(_cert_path(config.tls_cert), _cert_path(config.tls_key))
+            self.socket = context.wrap_socket(self.socket, server_side=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -96,7 +149,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Permissions-Policy", "microphone=(self)")
-        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'")
+        # media-src allows blob: so browser-playback mode can play the WAV the
+        # client fetches (same-origin) and wraps in a blob URL for an <audio>.
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; media-src 'self' blob:")
         self.end_headers()
 
     def _json(self, status: int, value: dict) -> None:
@@ -104,7 +159,27 @@ class Handler(BaseHTTPRequestHandler):
         self._headers(status, "application/json; charset=utf-8", len(body))
         self.wfile.write(body)
 
+    def _require_auth(self) -> bool:
+        """Gate every request behind HTTP Basic auth when it is configured.
+
+        Returns True when the caller may proceed; otherwise emits a 401 challenge
+        and returns False. A no-op when auth is disabled (loopback development).
+        """
+        if check_basic_auth(self.config, self.headers.get("Authorization")):
+            return True
+        body = json.dumps({"error": "unauthorized"}).encode("utf-8")
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("WWW-Authenticate", 'Basic realm="JARVIS", charset="UTF-8"')
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def do_GET(self) -> None:
+        if not self._require_auth():
+            return
         if self.path == "/":
             self._file("index.html", "text/html; charset=utf-8")
         elif self.path == "/app.js":
@@ -123,6 +198,7 @@ class Handler(BaseHTTPRequestHandler):
                     "tts": "ready" if speech.runtime_ready(self.config) else "unavailable",
                     "memory": "ready" if self.config.memory_enabled else "disabled",
                     "auto_memory": "ready" if self.config.memory_enabled and self.config.auto_memory_enabled else "disabled",
+                    "playback": self.config.tts_playback,
                     "speaking": speech.is_speaking(),
                     "limits": {
                         "history_messages": self.config.max_history_messages,
@@ -147,11 +223,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
+        if not self._require_auth():
+            return
         if self.path == "/api/transcribe":
             self._transcribe()
             return
         if self.path == "/api/speak":
             self._speak()
+            return
+        if self.path == "/api/speak/stream":
+            self._speak_stream()
             return
         if self.path == "/api/speak/stop":
             speech.stop()
@@ -216,6 +297,8 @@ class Handler(BaseHTTPRequestHandler):
             return
 
     def do_PATCH(self) -> None:
+        if not self._require_auth():
+            return
         memory_id = self._memory_id_from_path()
         if memory_id is None:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
@@ -243,6 +326,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "memory_unavailable"})
 
     def do_DELETE(self) -> None:
+        if not self._require_auth():
+            return
         memory_id = self._memory_id_from_path()
         if memory_id is None:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
@@ -327,15 +412,72 @@ class Handler(BaseHTTPRequestHandler):
             voices = list(speech.available_voices(self.config))
             if not voices:
                 raise speech.SpeechError("no voices are available")
+            fish_available = any(voice.get("engine") == "fish" for voice in voices)
             self._json(HTTPStatus.OK, {
                 "voices": voices,
                 "default_voice": speech.default_voice(self.config),
                 "default_rate": self.config.tts_rate,
                 "minimum_rate": speech.SPEECH_RATE_MIN,
                 "maximum_rate": speech.SPEECH_RATE_MAX,
+                # Live-tunable Fish (neural) parameters and their valid ranges, so
+                # the client can render sliders and clamp before sending overrides.
+                "fish": {
+                    "available": fish_available,
+                    "parameters": {
+                        "temperature": {"value": self.config.fish_temperature, "min": 0.1, "max": 1.0, "step": 0.05},
+                        "top_p": {"value": self.config.fish_top_p, "min": 0.1, "max": 1.0, "step": 0.05},
+                        "repetition_penalty": {"value": self.config.fish_repetition_penalty, "min": 0.9, "max": 2.0, "step": 0.05},
+                        "max_new_tokens": {"value": self.config.fish_max_new_tokens, "min": 64, "max": 4096, "step": 64},
+                    },
+                },
             })
         except speech.SpeechError:
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "speech_unavailable"})
+
+    def _speak_stream(self) -> None:
+        if self.headers.get_content_type() != "application/json":
+            self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "json_required"})
+            return
+        length = self.headers.get("Content-Length")
+        if not length or not length.isdigit():
+            self._json(HTTPStatus.LENGTH_REQUIRED, {"error": "content_length_required"})
+            return
+        size = int(length)
+        if not 1 <= size <= self.config.max_request_bytes:
+            self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request_too_large"})
+            return
+        # Open the Fish stream first so any failure is reported as JSON *before*
+        # streaming headers are sent; once bytes flow we can only drop the socket.
+        try:
+            payload = json.loads(self.rfile.read(size))
+            if not isinstance(payload, dict) or "text" not in payload or not set(payload) <= {"text", "voice", "rate", "fish"}:
+                raise speech.SpeechError("invalid speech request")
+            pronunciations = self.server.tts_word_pronunciations  # type: ignore[attr-defined]
+            chunks = speech.stream_fish_audio(
+                self.config,
+                payload["text"],
+                word_pronunciations=pronunciations,
+                voice=payload.get("voice"),
+                rate=payload.get("rate"),
+                fish_options=payload.get("fish"),
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, speech.SpeechError):
+            self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": "speech_failed"})
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        # No Content-Length: the client reads the streamed body until the socket
+        # closes, so audio can begin playing before the phrase is fully rendered.
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            for chunk in chunks:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionError, speech.SpeechError, OSError):
+            return
 
     def _read_json_body(self) -> dict:
         if self.headers.get_content_type() != "application/json":
@@ -411,15 +553,31 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             payload = json.loads(self.rfile.read(size))
-            if not isinstance(payload, dict) or set(payload) not in ({"text"}, {"text", "voice", "rate"}):
+            # text is required; voice, rate, and per-request fish tuning are optional.
+            if not isinstance(payload, dict) or "text" not in payload or not set(payload) <= {"text", "voice", "rate", "fish"}:
                 raise speech.SpeechError("invalid speech request")
             pronunciations = self.server.tts_word_pronunciations  # type: ignore[attr-defined]
+            if self.config.tts_playback == "browser":
+                # Return the rendered WAV so the client plays it on its own device;
+                # only reply text left this process to reach the local TTS engine.
+                audio = speech.render_audio(
+                    self.config,
+                    payload["text"],
+                    word_pronunciations=pronunciations,
+                    voice=payload.get("voice"),
+                    rate=payload.get("rate"),
+                    fish_options=payload.get("fish"),
+                )
+                self._headers(HTTPStatus.OK, "audio/wav", len(audio))
+                self.wfile.write(audio)
+                return
             speech.speak(
                 self.config,
                 payload["text"],
                 word_pronunciations=pronunciations,
                 voice=payload.get("voice"),
                 rate=payload.get("rate"),
+                fish_options=payload.get("fish"),
             )
             self._json(HTTPStatus.ACCEPTED, {"status": "speaking"})
         except (UnicodeDecodeError, json.JSONDecodeError, speech.SpeechError):
@@ -592,7 +750,12 @@ def exact_spelling_recall(messages: list[dict]) -> str | None:
 def main() -> None:
     config = load_config()
     server = JarvisServer((config.app_host, config.app_port), config)
-    print(f"JARVIS alpha listening at http://{config.app_host}:{config.app_port}")
+    auth_state = "auth on" if config.auth_enabled else "auth off"
+    playback = f"{config.tts_playback} playback"
+    print(
+        f"JARVIS alpha listening at {config.app_scheme}://{config.app_host}:{config.app_port}"
+        f"  [{auth_state}, {playback}]"
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

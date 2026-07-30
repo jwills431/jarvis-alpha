@@ -44,9 +44,14 @@ Test suite: 103 Python tests plus the browser-core tests, all passing.
 Fish Audio / OpenAudio S1-mini (the nicer neural voice, incl. the JARVIS clone)
 needs a CUDA GPU — the vendor states 12 GB VRAM minimum, Linux/WSL, CPU "not
 recommended", and `--compile` unsupported on macOS. The iMac Pro cannot run it
-usably. The PC has an **RTX 4070 Ti (12 GB)**, which clears that bar, so the PC is
-where Fish becomes viable. Full evaluation note in `docs/TTS.md` under "Engines
-evaluated and set aside".
+usably. The PC has a CUDA GPU that clears that bar, so a PC is where Fish becomes
+viable. Full evaluation note in `docs/TTS.md` under "Engines evaluated and set aside".
+
+> **Correction (2026-07-25):** this 07-21 note assumed an RTX 4070 Ti 12 GB. The
+> first PC actually had an **RTX 4060 Ti 8 GB** (see `PC_FISH_SESSION.md`). Work has
+> since moved to a **dedicated server, `GUItech-CORE`, with an RTX 3060 12 GB** —
+> chosen for the extra VRAM and to host JARVIS as a network-accessible service.
+> See `SERVER_BUILD_PROGRESS.md` (authoritative) and root `CLAUDE.md`.
 
 ## The architecture fork (decide before integrating Fish)
 
@@ -54,7 +59,7 @@ JARVIS is deliberately loopback-only; `README.md` lists LAN and remote access as
 excluded. The PC is a different machine, so:
 
 1. **Relocate the whole JARVIS stack to the PC.** Keeps everything local and
-   loopback-only, and the 4070 Ti also accelerates llama.cpp and whisper. Most
+   loopback-only, and the GPU also accelerates llama.cpp and whisper. Most
    effort, cleanest fit. The migration package already floated a Windows+RTX host.
 2. **Fish as a LAN service on the PC, JARVIS stays on the Mac.** Fastest, but
    crosses the loopback-only boundary — reply text would leave the Mac.

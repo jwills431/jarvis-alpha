@@ -50,6 +50,19 @@
         <select id="speech-voice" required></select>
         <label for="speech-rate" class="visible-label">Speaking rate (words per minute)</label>
         <input id="speech-rate" type="number" min="120" max="350" step="5" required inputmode="numeric">
+        <fieldset id="fish-tuning" hidden>
+          <legend>Neural voice tuning</legend>
+          <label for="fish-temperature" class="visible-label">Temperature (expressiveness) <span id="fish-temperature-value" class="tuning-value"></span></label>
+          <input id="fish-temperature" type="range" min="0.1" max="1" step="0.05">
+          <label for="fish-top-p" class="visible-label">Top-p (sampling diversity) <span id="fish-top-p-value" class="tuning-value"></span></label>
+          <input id="fish-top-p" type="range" min="0.1" max="1" step="0.05">
+          <label for="fish-repetition-penalty" class="visible-label">Repetition penalty <span id="fish-repetition-penalty-value" class="tuning-value"></span></label>
+          <input id="fish-repetition-penalty" type="range" min="0.9" max="2" step="0.05">
+          <label for="fish-max-tokens" class="visible-label">Max tokens per sentence <span id="fish-max-tokens-value" class="tuning-value"></span></label>
+          <input id="fish-max-tokens" type="range" min="64" max="4096" step="64">
+          <label class="visible-label" for="speech-stream"><input type="checkbox" id="speech-stream"> Low-latency streaming (start speaking as it renders)</label>
+          <p>Neural-voice settings apply live in this browser. Use Preview to hear a change before saving.</p>
+        </fieldset>
         <p>These preferences stay in this browser on the loopback JARVIS origin. They do not change macOS voice settings.</p>
         <div><button id="speech-defaults" type="button">Use defaults</button><button id="speech-preview" type="button">Preview</button><button id="speech-settings-save" type="submit">Save speech settings</button></div>
       </form>
