@@ -128,7 +128,9 @@ button:last-child{color:var(--ice);border-color:rgba(77,216,255,.55);background:
 .orb-bg,.orb-voice{pointer-events:none}
 .orb-bg{
   position:fixed;top:50%;left:50%;width:min(62vmin,620px);height:min(62vmin,620px);
-  transform:translate(-50%,-50%);z-index:0;opacity:.085;
+  z-index:0;opacity:.085;
+  /* centring and the amplitude pulse share one transform */
+  transform:translate(-50%,-50%) scale(calc(1 + var(--amp) * .05));
 }
 main{position:relative;z-index:1}
 .orb-slot{position:relative;display:inline-grid;place-items:center;margin-right:auto;
@@ -157,17 +159,15 @@ main{position:relative;z-index:1}
 .core{animation:orbpulse 5s ease-in-out infinite}
 @keyframes orbpulse{0%,100%{opacity:.72}50%{opacity:1}}
 
-/* Idle: amplitude is zero, so these are identity transforms and cost nothing.
-   Speaking: each band responds by a different amount, so the rings read as
-   driven by the voice rather than uniformly scaling. */
-.amp{transition:transform .08s linear}
-.amp-outer{transform:scale(calc(1 + var(--amp) * .05))}
-.amp-seg{transform:scale(calc(1 + var(--amp) * .11))}
-.amp-inner{transform:scale(calc(1 - var(--amp) * .05))}
-body.jarvis-speaking .core-hot{opacity:calc(.7 + var(--amp) * .3)}
-body.jarvis-speaking .stroke-seg{opacity:calc(.34 + var(--amp) * .5)}
-#voice.listening ~ .orb-voice .stroke-seg,
-.orb-slot:has(#voice.listening) .stroke-seg{stroke:var(--bad)}
+/* Amplitude scales the WHOLE orb uniformly about its centre, so it breathes
+   outward from the core as one object. (Scaling each ring by a different amount
+   made the rings drift relative to each other, which read as uneven rather than
+   as a pulse.) Idle is amplitude zero, an identity transform costing nothing. */
+.orb-voice{transform:scale(calc(1 + var(--amp) * .07));transform-origin:50% 50%;
+  transition:transform .07s linear}
+.orb-bg{transition:transform .07s linear}
+body.jarvis-speaking .core-hot{opacity:calc(.75 + var(--amp) * .25)}
+body.jarvis-speaking .stroke-seg{opacity:calc(.34 + var(--amp) * .45)}
 
 /* ---------- the arc reactor (push to talk) ----------
    #voice keeps its text node (app.js rewrites it), so the reactor is drawn
@@ -342,9 +342,17 @@ body.jarvis-speaking .stroke-seg{opacity:calc(.34 + var(--amp) * .5)}
   #speech-toggle{order:4} #stop-speech{order:5} #copy-chat{order:6} #clear{order:7}
   #toast{bottom:calc(env(safe-area-inset-bottom,0px) + 12px)}
 }
+/* Reduced motion suppresses the ATTENTION-GRABBING motion — the scanline sweep,
+   the boot type-in and glow, the listening ripple — but deliberately keeps the
+   orb's slow rotation and core pulse. Those are gentle (22-90s per revolution),
+   sit behind the content rather than near the reading line, and are the whole
+   point of the feature. A blanket animation:none here also froze the orb on the
+   server, where Windows animation effects are switched off system-wide. */
 @media (prefers-reduced-motion:reduce){
-  *,*::before,*::after{animation:none!important;transition:none!important}
   body::after{display:none}
+  #boot .boot-lines div,#boot-start{animation:none!important}
+  #voice.listening::after{animation:none!important}
+  .orb-voice,.orb-bg{transition:none!important}
 }
 /* Animations are what reduced motion disables, so anything that FADES IN must be
    given its final appearance explicitly — otherwise it stays at opacity 0 and the
