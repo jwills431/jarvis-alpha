@@ -245,11 +245,15 @@ function playBrowserAudio(blob, requestId) {
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
     currentAudio = audio;
-    // Route the element through the analyser too, so the blob fallback drives the
-    // orb exactly like the streaming path. Each element may only be tapped once.
+    // Optionally route the element through the analyser so the blob fallback also
+    // drives the orb. Only when the context is genuinely RUNNING: tapping an
+    // element diverts it from the default output, so doing this against a
+    // suspended context (common on iOS) plays nothing at all. Silence is a far
+    // worse outcome than an orb that does not react, so the visual is the part
+    // that gets sacrificed.
     try {
-      const ctx = getAudioContext();
-      const sink = audioSink();
+      const ctx = audioCtx && audioCtx.state === 'running' ? audioCtx : null;
+      const sink = ctx ? audioSink() : null;
       if (ctx && sink) { ctx.createMediaElementSource(audio).connect(sink); startAmpLoop(); }
     } catch { /* not analysable: audio still plays, the orb just idles */ }
     let settled = false;
@@ -292,6 +296,12 @@ const FISH_STREAM_SAMPLE_RATE = 44100;
 async function streamFishSentence(payload, requestId) {
   const ctx = getAudioContext();
   if (!ctx) return false;
+  // resume() is asynchronous, and on iOS a context that has not finished
+  // resuming schedules silently. Wait for it before committing to this path.
+  if (ctx.state === 'suspended') {
+    try { await ctx.resume(); } catch { /* fall through to the blob path */ }
+    if (ctx.state !== 'running') return false;
+  }
   let response;
   try {
     response = await fetch('/api/speak/stream', {

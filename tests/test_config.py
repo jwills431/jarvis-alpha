@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from jarvis.config import Config, load_config
 from jarvis.backend import BackendError, count_unsupported_script_characters, sanitize_sse_line, stream_chat
-from jarvis.server import SYSTEM_PROMPT, JarvisServer, check_basic_auth, exact_spelling_recall, extract_authoritative_spellings, is_source_bound_request, prepare_model_messages, validate_messages, verify_password
+from jarvis.server import SYSTEM_PROMPT, JarvisServer, check_basic_auth, static_route, exact_spelling_recall, extract_authoritative_spellings, is_source_bound_request, prepare_model_messages, validate_messages, verify_password
 from jarvis import speech
 from jarvis.speech import (
     SpeechError,
@@ -224,6 +224,26 @@ class ConfigTests(unittest.TestCase):
 
     def test_allows_browser_playback(self):
         self.assertEqual(Config(tts_playback="browser").validate().tts_playback, "browser")
+
+
+class StaticRoutingTests(unittest.TestCase):
+    def test_cache_busting_suffix_still_routes_to_the_asset(self):
+        # Assets are linked as /styles.css?v=N so a stale copy cannot survive a
+        # reload; the router must ignore the query when matching the path.
+        self.assertEqual(static_route("/app.js?v=3"), "/app.js")
+        self.assertEqual(static_route("/styles.css?v=12"), "/styles.css")
+        self.assertEqual(static_route("/core.js?v=3"), "/core.js")
+
+    def test_paths_without_a_query_are_untouched(self):
+        for path in ("/app.js", "/styles.css", "/", "/api/health"):
+            self.assertEqual(static_route(path), path)
+
+    def test_a_query_cannot_redirect_a_non_asset_path(self):
+        # Only the known assets are unwrapped, so a query string can never be
+        # used to make some other route look like a static file.
+        self.assertEqual(static_route("/api/health?x=1"), "/api/health?x=1")
+        self.assertEqual(static_route("/api/memories?v=1"), "/api/memories?v=1")
+        self.assertEqual(static_route("/../secret?v=1"), "/../secret?v=1")
 
 
 class AuthTests(unittest.TestCase):

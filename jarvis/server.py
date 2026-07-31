@@ -63,6 +63,23 @@ ASSISTANT_OUTPUT_REQUEST = re.compile(
 )
 
 
+STATIC_ASSETS = ("/app.js", "/core.js", "/styles.css")
+
+
+def static_route(path: str) -> str:
+    """Strip a cache-busting query from a static asset request.
+
+    Assets are linked as /styles.css?v=N so that a browser holding a stale copy
+    is forced to refetch on the next load; the router still has to match them by
+    path. Anything that is not a known static asset is returned untouched, so a
+    query string can never be used to reach another handler.
+    """
+    if "?" not in path:
+        return path
+    base = path.split("?", 1)[0]
+    return base if base in STATIC_ASSETS else path
+
+
 def _cert_path(value: str) -> str:
     """Resolve a configured TLS path (absolute as-is, relative to the repo root)."""
     path = Path(value)
@@ -183,6 +200,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not self._require_auth():
             return
+        # Mobile browsers served a stale stylesheet and script against fresh
+        # markup despite every response saying no-store, so assets carry a ?v=
+        # suffix and are routed by path alone.
+        self.path = static_route(self.path)
         if self.path == "/":
             self._file("index.html", "text/html; charset=utf-8")
         elif self.path == "/app.js":
