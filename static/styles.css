@@ -15,9 +15,9 @@
   background:var(--void); color:var(--text);
 }
 *{box-sizing:border-box}
-html,body{height:100%}
+html,body{height:100%;max-width:100%}
 body{
-  margin:0;min-height:100vh;min-height:100dvh;overflow:hidden;
+  margin:0;min-height:100vh;min-height:100dvh;overflow:hidden;overflow-x:hidden;
   background:
     radial-gradient(ellipse at 50% -10%,rgba(77,216,255,.10),transparent 55%),
     repeating-linear-gradient(0deg,transparent 0 3px,rgba(77,216,255,.018) 3px 4px),
@@ -125,6 +125,9 @@ button:last-child{color:var(--ice);border-color:rgba(77,216,255,.55);background:
    rotation lives on the outer <g> and amplitude scaling on the inner one so the
    two transforms never fight. */
 :root{--amp:0}
+/* The sprite holds the <symbol> only. Left inline it still generates a line box
+   (~21px), which pushed the whole console down and made the page scrollable. */
+#orb-sprite{position:absolute;width:0;height:0;overflow:hidden}
 .orb-bg,.orb-voice{pointer-events:none}
 .orb-bg{
   position:fixed;top:50%;left:50%;width:min(62vmin,620px);height:min(62vmin,620px);
@@ -339,14 +342,24 @@ body.jarvis-speaking{--orb-hot-op:calc(.75 + var(--amp) * .25);
   #chat-hint,#voice-hint,#conversation-hint,#speech-hint,#auto-memory-hint,#learn-hint{
     position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
     clip:rect(0 0 0 0);white-space:nowrap;border:0}
-  form div{flex-wrap:wrap;gap:6px;margin-top:7px}
-  form div button{flex:1 1 auto;min-width:0;padding:8px 9px;font-size:.56rem}
-  /* reactor centred above a compact control row */
-  #voice{flex:1 1 100%;order:1;margin:0 auto 6px;width:112px;height:104px;padding:66px 0 0}
-  #voice::before{width:34px;height:34px;margin-left:-17px;top:12px}
-  #send{flex:1 1 40%;order:2;padding:11px 10px;font-size:.68rem}
-  #conversation{flex:1 1 45%;order:3}
+  /* Two buttons per row by construction. Sizing them from content let a long
+     label push the row past the screen instead of wrapping, which is what made
+     the page scroll sideways and clipped the controls on the right. */
+  form div{flex-wrap:wrap;gap:6px;margin-top:7px;justify-content:space-between}
+  form div button{flex:1 1 calc(50% - 3px);min-width:0;padding:9px 4px;
+    font-size:.55rem;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* The flex item is the SLOT, not the button inside it, so ordering and sizing
+     must be applied here — targeting #voice silently did nothing and left the
+     slot at its desktop width, which broke the row and inflated the composer. */
+  .orb-slot{flex:0 0 100%;order:1;margin:0 auto 2px;width:92px;height:92px}
+  .orb-voice{width:92px;height:92px}
+  #voice{width:92px;height:92px;padding:66px 0 0;font-size:.54rem;letter-spacing:.12em}
+  #send{order:2;padding:11px 4px;font-size:.66rem}
+  #conversation{order:3}
   #speech-toggle{order:4} #stop-speech{order:5} #copy-chat{order:6} #clear{order:7}
+  /* Phone screens are viewed in daylight and are usually dimmer than a monitor,
+     so the background orb needs noticeably more presence to read at all. */
+  .orb-bg{opacity:.22;width:min(86vmin,520px);height:min(86vmin,520px);--orb-seg-w:5}
   #toast{bottom:calc(env(safe-area-inset-bottom,0px) + 12px)}
 }
 /* Reduced motion suppresses the ATTENTION-GRABBING motion — the scanline sweep,
