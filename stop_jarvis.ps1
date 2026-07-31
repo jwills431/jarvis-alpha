@@ -1,33 +1,37 @@
-# stop_jarvis.ps1 - cleanly stop the JARVIS stack (app + llama.cpp + Fish) running in WSL.
-# Run from a PowerShell prompt:  .\stop_jarvis.ps1
-# (or right-click -> Run with PowerShell)
+# stop_jarvis.ps1 - cleanly stop the JARVIS stack (app + llama.cpp + whisper + Fish)
+# running in WSL. Run from a PowerShell prompt:  .\stop_jarvis.ps1
+# (or right-click -> Run with PowerShell). Elevation is NOT required: the
+# services run in WSL as your own user.
 
 Write-Host "Stopping JARVIS stack..." -ForegroundColor Cyan
 
-# Process command-line patterns for the three services.
-$patterns = @('jarvis.server', 'llama-server', 'whisper-server', 'tools.api_server')
+# Patterns are bracketed - "[j]arvis.server" instead of "jarvis.server" - so the
+# regex cannot match the command line of the very shell running pkill. Without
+# that, pkill killed its own parent shell mid-run and the script appeared to hang
+# after printing this first line.
+$patterns = @('[j]arvis.server', '[l]lama-server', '[w]hisper-server', '[t]ools.api_server')
+$joined = $patterns -join '|'
 
-# 1) Ask each to exit gracefully (SIGTERM). This lets the app release the Piper
-#    worker and close sockets cleanly.
-foreach ($p in $patterns) {
-  wsl -d Ubuntu bash -lc "pkill -TERM -f '$p' 2>/dev/null; true" | Out-Null
-}
+# One call does the whole sequence, so a killed shell cannot strand the rest:
+# ask politely, wait, then insist.
+$script = @"
+pkill -TERM -f '$joined' 2>/dev/null
+sleep 3
+pkill -KILL -f '$joined' 2>/dev/null
+sleep 1
+pgrep -af '$joined' || echo __ALL_STOPPED__
+"@
 
-Start-Sleep -Seconds 3
+$result = $script | wsl -d Ubuntu bash 2>&1
 
-# 2) Force-kill anything that ignored the graceful stop.
-foreach ($p in $patterns) {
-  wsl -d Ubuntu bash -lc "pkill -KILL -f '$p' 2>/dev/null; true" | Out-Null
-}
-
-Start-Sleep -Seconds 1
-
-# 3) Confirm the app port is down.
-$health = wsl -d Ubuntu bash -lc "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/health 2>/dev/null"
-if ([string]::IsNullOrWhiteSpace($health) -or $health -eq '000') {
-  Write-Host "JARVIS stopped cleanly. All three services are down." -ForegroundColor Green
+if ($result -match '__ALL_STOPPED__') {
+  Write-Host "JARVIS stopped cleanly. App, model, recognizer and voice are all down." -ForegroundColor Green
 } else {
-  Write-Host "Warning: the app still responded (HTTP $health). Re-run this script or check WSL." -ForegroundColor Yellow
+  Write-Host "Some processes are still running:" -ForegroundColor Yellow
+  $result | ForEach-Object { Write-Host "  $_" }
+  Write-Host "Re-run this script, or use: wsl --shutdown" -ForegroundColor Yellow
 }
 
-Write-Host "(WSL itself is left running. To stop the whole WSL VM too, run:  wsl --shutdown )" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "WSL itself is still running. To release its memory too:  wsl --shutdown" -ForegroundColor DarkGray
+Write-Host "That is worth doing before shutting the machine down for the night." -ForegroundColor DarkGray
