@@ -380,6 +380,14 @@ speaker. Joseph confirmed the on-device voice test "worked much better".
   About → Certificate Trust Settings) rather than clicking through the warning.
 - Verified: LAN TCP reachable, 401 without credentials and with a wrong password,
   cert presented correctly on the LAN address, llama + Fish still loopback-only.
+- **How to open it now (both on the server and from a phone): `https://` — not
+  `http://`.** Once TLS is configured the port is TLS-only, so `http://localhost:8787`
+  simply hangs, which reads like "the app is broken". Working URLs, all covered by
+  the cert's SANs: `https://localhost:8787`, `https://127.0.0.1:8787`,
+  `https://192.168.7.83:8787`, `https://guitech-core:8787`. Expect a one-time
+  self-signed warning, then the Basic-auth login prompt. To go back to plain
+  loopback HTTP for local development, clear `tls_cert`/`tls_key`/`auth_enabled`
+  and set `app_host` to `127.0.0.1` (the interlock requires all three together).
 
 ## Server lean checklist — status (2026-07-31)
 
