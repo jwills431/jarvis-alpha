@@ -319,14 +319,25 @@ body.jarvis-speaking{--orb-hot-op:calc(.75 + var(--amp) * .25);
 #toast.visible{opacity:1;transform:translate(-50%,0)}
 
 @media (max-width:700px){
-  main{padding:13px 10px 11px;gap:10px}
+  /* svh, not dvh: the small viewport unit is the one that assumes the browser
+     toolbars are SHOWN, so the console always fits without the bottom row
+     hiding under Safari's chrome. dvh tracks the current viewport and let the
+     controls fall below the fold. */
+  body{min-height:100svh}
+  main{padding:13px 10px 11px;gap:10px;height:100svh}
   main::before,main::after{width:18px;height:18px}
   header{align-items:center;gap:8px;padding-bottom:9px}
   h1{font-size:.92rem;letter-spacing:.34em}
   .tagline{display:none}
-  #status{padding:5px 9px;font-size:.56rem}
-  .header-actions{gap:6px;position:relative}
-  .header-actions button{padding:7px 10px;font-size:.58rem}
+  /* The status text is written by the app and can be long ("Local model ready"),
+     and nowrap made it push the header past the screen edge. It may shrink and
+     ellipsize here; colour still carries ready/offline at a glance. */
+  #status{padding:5px 8px;font-size:.54rem;min-width:0;flex:0 1 auto;
+    overflow:hidden;text-overflow:ellipsis;max-width:38vw}
+  header{min-width:0}
+  header>div:first-child{min-width:0;flex:0 0 auto}
+  .header-actions{gap:5px;position:relative;min-width:0;flex:1 1 auto}
+  .header-actions button{padding:7px 8px;font-size:.55rem;flex:0 0 auto}
   article{max-width:93%;padding:11px 13px}
 
   #memory-menu-toggle{display:inline-block}
