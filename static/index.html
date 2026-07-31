@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JARVIS Alpha</title>
-  <link rel="stylesheet" href="/styles.css?v=5">
+  <link rel="stylesheet" href="/styles.css?v=6">
 </head>
 <body>
   <div id="boot">
@@ -55,7 +55,7 @@
   <main>
     <header><div><h1>JARVIS</h1><p class="tagline">Local · private</p></div><div class="header-actions"><button id="memory-menu-toggle" type="button" aria-expanded="false" aria-controls="memory-group" hidden>Memory ▾</button><div id="memory-group"><button id="auto-memory-toggle" type="button" disabled aria-pressed="true">Auto memory on</button><button id="learn-toggle" type="button" disabled aria-pressed="false">Learn mode</button><button id="memory-toggle" type="button" disabled aria-haspopup="dialog">Memory</button></div><button id="speech-settings-toggle" type="button" disabled aria-haspopup="dialog">Speech</button><span id="status">Checking…</span></div></header>
     <section id="messages" aria-live="polite"><article class="assistant">Ready when the local model is online.</article></section>
-    <form id="chat"><label for="prompt">Message</label><textarea id="prompt" maxlength="8000" rows="3" required aria-describedby="chat-hint voice-hint conversation-hint speech-hint auto-memory-hint learn-hint"></textarea><p id="chat-hint" aria-live="polite">Enter to send · Shift+Enter for a new line</p><p id="voice-hint" aria-live="polite">Hold the microphone button while speaking. Recognized speech is submitted automatically.</p><p id="conversation-hint" aria-live="polite">Conversation mode is off. When enabled, say “Goodbye, JARVIS” to close the microphone.</p><p id="speech-hint" aria-live="polite">JARVIS streams each reply using the configured local voice.</p><p id="auto-memory-hint" aria-live="polite">Automatic local memory is checking durable user facts only.</p><p id="learn-hint" aria-live="polite">Learn mode is off. Turn it on before a guided get-to-know-you conversation.</p><div id="memory-notice" hidden role="status" aria-live="polite"><span id="memory-notice-text"></span><button id="memory-notice-undo" type="button">Undo</button></div><div><span class="orb-slot"><svg class="orb-voice" aria-hidden="true" focusable="false" viewBox="0 0 200 200"><use href="#orb"/></svg><button id="voice" type="button" disabled aria-pressed="false">Hold to talk</button></span><button id="conversation" type="button" disabled aria-pressed="false">Conversation mode</button><button id="speech-toggle" type="button" disabled aria-pressed="true">Voice on</button><button id="stop-speech" type="button" disabled>Stop speaking</button><button id="copy-chat" type="button">Copy chat</button><button id="clear" type="button">Clear</button><button id="send" type="submit">Send</button></div></form>
+    <form id="chat"><label for="prompt">Message</label><textarea id="prompt" maxlength="8000" rows="3" required aria-describedby="chat-hint voice-hint conversation-hint speech-hint auto-memory-hint learn-hint"></textarea><p id="chat-hint" aria-live="polite">Enter to send · Shift+Enter for a new line</p><p id="voice-hint" aria-live="polite">Hold the microphone button while speaking. Recognized speech is submitted automatically.</p><p id="conversation-hint" aria-live="polite">Conversation mode is off. When enabled, say “Goodbye, JARVIS” to close the microphone.</p><p id="speech-hint" aria-live="polite">JARVIS streams each reply using the configured local voice.</p><p id="auto-memory-hint" aria-live="polite">Automatic local memory is checking durable user facts only.</p><p id="learn-hint" aria-live="polite">Learn mode is off. Turn it on before a guided get-to-know-you conversation.</p><div id="memory-notice" hidden role="status" aria-live="polite"><span id="memory-notice-text"></span><button id="memory-notice-undo" type="button">Undo</button></div><div class="controls"><span class="orb-slot"><svg class="orb-voice" aria-hidden="true" focusable="false" viewBox="0 0 200 200"><use href="#orb"/></svg><button id="voice" type="button" disabled aria-pressed="false">Hold to talk</button></span><button id="send" type="submit">Send</button><span class="menu-wrap"><button id="voice-menu-toggle" type="button" aria-expanded="false" aria-controls="voice-group">Voice ▾</button><div id="voice-group" class="menu-group"><button id="conversation" type="button" disabled aria-pressed="false">Conversation mode</button><button id="speech-toggle" type="button" disabled aria-pressed="true">Voice on</button></div></span><span class="menu-wrap"><button id="chat-menu-toggle" type="button" aria-expanded="false" aria-controls="chat-group">Chat ▾</button><div id="chat-group" class="menu-group"><button id="copy-chat" type="button">Copy chat</button><button id="clear" type="button">Clear</button></div></span><button id="stop-speech" type="button" disabled>Stop speaking</button></div></form>
   </main>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <div id="memory-backdrop" hidden>
@@ -114,7 +114,7 @@
       </form>
     </section>
   </div>
-  <script src="/core.js?v=5"></script>
-  <script src="/app.js?v=5"></script>
+  <script src="/core.js?v=6"></script>
+  <script src="/app.js?v=6"></script>
 </body>
 </html>

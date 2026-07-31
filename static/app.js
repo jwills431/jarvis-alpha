@@ -1932,34 +1932,49 @@ function watchStatusHints() {
   for (const el of hints) observer.observe(el, {childList: true, characterData: true, subtree: true});
 }
 
-function closeMemoryMenu() {
-  if (!memoryGroupEl || !memoryMenuToggleEl) return;
-  memoryGroupEl.classList.remove('open');
-  memoryMenuToggleEl.setAttribute('aria-expanded', 'false');
+// Popover menus. The memory group collapses only on narrow screens (its buttons
+// sit inline on a desktop header); the composer menus are always collapsed,
+// since seven controls in one row is noise on any screen.
+const openMenus = [];
+
+function closeAllMenus() {
+  for (const menu of openMenus) menu.close();
+}
+
+function setupMenu(toggleEl, groupEl, {mobileOnly = false} = {}) {
+  if (!toggleEl || !groupEl) return;
+  const close = () => {
+    groupEl.classList.remove('open');
+    toggleEl.setAttribute('aria-expanded', 'false');
+  };
+  openMenus.push({close});
+  if (mobileOnly) {
+    const mobile = window.matchMedia('(max-width:700px)');
+    const sync = () => { toggleEl.hidden = !mobile.matches; if (!mobile.matches) close(); };
+    sync();
+    mobile.addEventListener('change', sync);
+  }
+  toggleEl.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const wasOpen = groupEl.classList.contains('open');
+    closeAllMenus();                       // only one menu open at a time
+    if (!wasOpen) {
+      groupEl.classList.add('open');
+      toggleEl.setAttribute('aria-expanded', 'true');
+    }
+  });
+  // Choosing an item, tapping elsewhere, or Escape all dismiss the menu.
+  groupEl.addEventListener('click', (event) => { if (event.target.closest('button')) close(); });
+  document.addEventListener('click', (event) => {
+    if (!groupEl.contains(event.target) && event.target !== toggleEl) close();
+  });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
 }
 
 function setupMemoryMenu() {
-  if (!memoryGroupEl || !memoryMenuToggleEl) return;
-  const mobile = window.matchMedia('(max-width:700px)');
-  const sync = () => {
-    memoryMenuToggleEl.hidden = !mobile.matches;
-    if (!mobile.matches) closeMemoryMenu();
-  };
-  sync();
-  mobile.addEventListener('change', sync);
-  memoryMenuToggleEl.addEventListener('click', (event) => {
-    event.stopPropagation();
-    const open = memoryGroupEl.classList.toggle('open');
-    memoryMenuToggleEl.setAttribute('aria-expanded', open ? 'true' : 'false');
-  });
-  // Choosing an item, tapping elsewhere, or Escape all dismiss the menu.
-  memoryGroupEl.addEventListener('click', (event) => {
-    if (event.target.closest('button')) closeMemoryMenu();
-  });
-  document.addEventListener('click', (event) => {
-    if (!memoryGroupEl.contains(event.target) && event.target !== memoryMenuToggleEl) closeMemoryMenu();
-  });
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMemoryMenu(); });
+  setupMenu(memoryMenuToggleEl, memoryGroupEl, {mobileOnly: true});
+  setupMenu(document.querySelector('#voice-menu-toggle'), document.querySelector('#voice-group'));
+  setupMenu(document.querySelector('#chat-menu-toggle'), document.querySelector('#chat-group'));
 }
 
 // Unlock audio playback on the first real user interaction (typing counts), so the

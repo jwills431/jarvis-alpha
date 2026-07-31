@@ -106,7 +106,21 @@ textarea::placeholder{color:var(--muted)}
 #voice-hint{color:#8fbccd} #conversation-hint{color:var(--amber)}
 #speech-hint{color:#8fb6d8} #auto-memory-hint{color:var(--good)} #learn-hint{color:#a8cbbf}
 
-form div{display:flex;justify-content:flex-end;gap:8px;margin-top:10px;align-items:center}
+form .controls{display:flex;justify-content:flex-end;gap:8px;margin-top:10px;align-items:center}
+/* Popover menus in the composer. Grouping the occasional controls keeps the row
+   to what is actually used mid-conversation: talk, send, and stop. */
+.menu-wrap{position:relative;display:inline-flex}
+.menu-group{display:none;position:absolute;bottom:calc(100% + 8px);right:0;z-index:25;
+  flex-direction:column;align-items:stretch;gap:7px;min-width:190px;padding:10px;
+  border:1px solid var(--line);background:var(--panel-solid);
+  box-shadow:0 16px 40px rgba(0,0,0,.55);
+  clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+.menu-group.open{display:flex}
+.menu-group button{width:100%;text-align:left}
+/* Stop speaking earns its place in the row only while there is speech to stop,
+   so it is not a permanently dead control. */
+#stop-speech{display:none}
+body.jarvis-speaking #stop-speech{display:inline-block}
 button{
   font-family:var(--mono);font-size:.64rem;letter-spacing:.15em;text-transform:uppercase;
   padding:9px 15px;background:transparent;color:var(--muted);border:1px solid var(--line);
@@ -116,7 +130,9 @@ button{
 }
 button:hover:not(:disabled){border-color:var(--cyan);color:var(--ice);background:rgba(77,216,255,.07)}
 button:disabled{opacity:.38;cursor:not-allowed}
-button:last-child{color:var(--ice);border-color:rgba(77,216,255,.55);background:rgba(77,216,255,.13)}
+/* Target Send explicitly: :last-child moved when the controls were regrouped. */
+#send{color:var(--ice);border-color:rgba(77,216,255,.55);background:rgba(77,216,255,.13)}
+#memory-save,#speech-settings-save{color:var(--ice);border-color:rgba(77,216,255,.55);background:rgba(77,216,255,.13)}
 
 /* ---------- the orb ----------
    One <symbol>, used twice: a dim background layer and the voice control.
@@ -357,18 +373,23 @@ body.jarvis-speaking{--orb-hot-op:calc(.75 + var(--amp) * .25);
   /* Two buttons per row by construction. Sizing them from content let a long
      label push the row past the screen instead of wrapping, which is what made
      the page scroll sideways and clipped the controls on the right. */
-  form div{flex-wrap:wrap;gap:6px;margin-top:7px;justify-content:space-between}
-  form div button{flex:1 1 calc(50% - 3px);min-width:0;padding:9px 4px;
-    font-size:.55rem;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  form .controls{flex-wrap:wrap;gap:6px;margin-top:7px;justify-content:space-between}
+  /* Send plus the two menus share one row; the menu popovers are absolutely
+     positioned so they never widen it. */
+  form .controls > button,form .controls > .menu-wrap{flex:1 1 calc(33.333% - 4px);min-width:0}
+  form .controls button{padding:9px 4px;font-size:.55rem;letter-spacing:.06em;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}
+  .menu-group{min-width:150px;left:0;right:auto}
+  .menu-group button{font-size:.6rem;padding:10px 8px}
   /* The flex item is the SLOT, not the button inside it, so ordering and sizing
      must be applied here — targeting #voice silently did nothing and left the
      slot at its desktop width, which broke the row and inflated the composer. */
   .orb-slot{flex:0 0 100%;order:1;margin:0 auto 2px;width:92px;height:92px}
   .orb-voice{width:92px;height:92px}
   #voice{width:92px;height:92px;padding:66px 0 0;font-size:.54rem;letter-spacing:.12em}
-  #send{order:2;padding:11px 4px;font-size:.66rem}
-  #conversation{order:3}
-  #speech-toggle{order:4} #stop-speech{order:5} #copy-chat{order:6} #clear{order:7}
+  #send{order:2;font-size:.62rem}
+  .menu-wrap:nth-of-type(1){order:3} .menu-wrap:nth-of-type(2){order:4}
+  #stop-speech{order:5;flex:1 1 100%}
   /* Phone screens are viewed in daylight and are usually dimmer than a monitor,
      so the background orb needs noticeably more presence to read at all. */
   .orb-bg{opacity:.22;width:min(86vmin,520px);height:min(86vmin,520px);--orb-seg-w:5}
