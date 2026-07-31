@@ -245,6 +245,13 @@ function playBrowserAudio(blob, requestId) {
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
     currentAudio = audio;
+    // Route the element through the analyser too, so the blob fallback drives the
+    // orb exactly like the streaming path. Each element may only be tapped once.
+    try {
+      const ctx = getAudioContext();
+      const sink = audioSink();
+      if (ctx && sink) { ctx.createMediaElementSource(audio).connect(sink); startAmpLoop(); }
+    } catch { /* not analysable: audio still plays, the orb just idles */ }
     let settled = false;
     const cleanup = () => {
       if (settled) return;
@@ -325,7 +332,8 @@ async function streamFishSentence(payload, requestId) {
       buffer.getChannelData(0).set(channel);
       const source = ctx.createBufferSource();
       source.buffer = buffer;
-      source.connect(ctx.destination);
+      source.connect(audioSink() || ctx.destination);
+      startAmpLoop();
       const startAt = Math.max(streamClock, ctx.currentTime);
       source.start(startAt);
       streamClock = startAt + buffer.duration;
@@ -365,6 +373,15 @@ function silentWavBlob() {
   return new Blob([buf], {type: 'audio/wav'});
 }
 
+// Audio-reactive orb. An AnalyserNode sits between the speech sources and the
+// speakers, so the rings are driven by the actual waveform rather than a faked
+// animation. The sampling loop runs ONLY while audio is scheduled — it starts
+// when playback starts and stops itself when the graph goes quiet — so an idle
+// page costs nothing beyond the CSS rotations.
+let analyserNode = null;
+let ampRaf = 0;
+let ampData = null;
+
 function getAudioContext() {
   if (!audioCtx) {
     const Ctor = window.AudioContext || window.webkitAudioContext;
@@ -374,6 +391,53 @@ function getAudioContext() {
   if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => { /* resumes on next gesture */ });
   return audioCtx;
 }
+
+// Everything that makes sound connects here instead of straight to destination.
+function audioSink() {
+  const ctx = getAudioContext();
+  if (!ctx) return null;
+  if (!analyserNode) {
+    analyserNode = ctx.createAnalyser();
+    analyserNode.fftSize = 256;
+    analyserNode.smoothingTimeConstant = 0.75;
+    analyserNode.connect(ctx.destination);
+    ampData = new Uint8Array(analyserNode.frequencyBinCount);
+  }
+  return analyserNode;
+}
+
+function stopAmpLoop() {
+  if (ampRaf) cancelAnimationFrame(ampRaf);
+  ampRaf = 0;
+  document.documentElement.style.setProperty('--amp', '0');
+}
+
+function startAmpLoop() {
+  if (ampRaf || !analyserNode || !ampData) return;
+  let quietFrames = 0;
+  const tick = () => {
+    analyserNode.getByteTimeDomainData(ampData);
+    // Peak deviation from the 128 midpoint, normalised and gently curved so
+    // quiet speech still moves the rings a little.
+    let peak = 0;
+    for (let i = 0; i < ampData.length; i++) {
+      const d = Math.abs(ampData[i] - 128);
+      if (d > peak) peak = d;
+    }
+    const amp = Math.min(1, Math.pow(peak / 90, 0.8));
+    document.documentElement.style.setProperty('--amp', amp.toFixed(3));
+    // Stop once the graph has been silent for about a second, so the loop never
+    // outlives the audio and a paused tab settles to zero cost.
+    quietFrames = amp < 0.02 ? quietFrames + 1 : 0;
+    if (quietFrames > 60 || document.hidden) { stopAmpLoop(); return; }
+    ampRaf = requestAnimationFrame(tick);
+  };
+  ampRaf = requestAnimationFrame(tick);
+}
+
+// A hidden tab should never animate: browsers throttle rAF anyway, but this also
+// clears the last amplitude so nothing is left mid-pulse on return.
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopAmpLoop(); });
 
 // --- Spoken greeting on start-up -------------------------------------------
 //

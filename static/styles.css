@@ -118,53 +118,82 @@ button:hover:not(:disabled){border-color:var(--cyan);color:var(--ice);background
 button:disabled{opacity:.38;cursor:not-allowed}
 button:last-child{color:var(--ice);border-color:rgba(77,216,255,.55);background:rgba(77,216,255,.13)}
 
+/* ---------- the orb ----------
+   One <symbol>, used twice: a dim background layer and the voice control.
+   Rotation is pure CSS transform (compositor-only, no per-frame JS). While
+   JARVIS speaks, --amp is written from a real AnalyserNode on the audio graph;
+   rotation lives on the outer <g> and amplitude scaling on the inner one so the
+   two transforms never fight. */
+:root{--amp:0}
+.orb-bg,.orb-voice{pointer-events:none}
+.orb-bg{
+  position:fixed;top:50%;left:50%;width:min(62vmin,620px);height:min(62vmin,620px);
+  transform:translate(-50%,-50%);z-index:0;opacity:.085;
+}
+main{position:relative;z-index:1}
+.orb-slot{position:relative;display:inline-grid;place-items:center;margin-right:auto;
+  width:118px;height:118px}
+.orb-voice{position:absolute;width:118px;height:118px;opacity:.92}
+/* The background copy is decorative only: thinner strokes keep it from competing
+   with the conversation sitting on top of it. */
+.orb-bg .stroke-seg{stroke-width:4}
+.orb-bg .node,.orb-bg .core-hot{opacity:.5}
+
+.orb-bg g,.orb-voice g{transform-box:view-box;transform-origin:100px 100px}
+.stroke-faint{fill:none;stroke:var(--cyan);stroke-width:.7;opacity:.34}
+.stroke-soft{fill:none;stroke:var(--cyan);stroke-width:1;opacity:.5}
+.stroke-seg{fill:none;stroke:var(--cyan);stroke-width:7;opacity:.34}
+.stroke-seg-thin{fill:none;stroke:var(--cyan);stroke-width:3;opacity:.4}
+.node{fill:var(--ice);opacity:.85}
+.core-fill{fill:rgba(77,216,255,.10)}
+.core-hot{fill:var(--ice);opacity:.9}
+
+.rot-cw-slow{animation:orbspin 90s linear infinite}
+.rot-ccw-slow{animation:orbspin 70s linear infinite reverse}
+.rot-cw-mid{animation:orbspin 46s linear infinite}
+.rot-ccw-mid{animation:orbspin 34s linear infinite reverse}
+.rot-cw-fast{animation:orbspin 22s linear infinite}
+@keyframes orbspin{to{transform:rotate(360deg)}}
+.core{animation:orbpulse 5s ease-in-out infinite}
+@keyframes orbpulse{0%,100%{opacity:.72}50%{opacity:1}}
+
+/* Idle: amplitude is zero, so these are identity transforms and cost nothing.
+   Speaking: each band responds by a different amount, so the rings read as
+   driven by the voice rather than uniformly scaling. */
+.amp{transition:transform .08s linear}
+.amp-outer{transform:scale(calc(1 + var(--amp) * .05))}
+.amp-seg{transform:scale(calc(1 + var(--amp) * .11))}
+.amp-inner{transform:scale(calc(1 - var(--amp) * .05))}
+body.jarvis-speaking .core-hot{opacity:calc(.7 + var(--amp) * .3)}
+body.jarvis-speaking .stroke-seg{opacity:calc(.34 + var(--amp) * .5)}
+#voice.listening ~ .orb-voice .stroke-seg,
+.orb-slot:has(#voice.listening) .stroke-seg{stroke:var(--bad)}
+
 /* ---------- the arc reactor (push to talk) ----------
    #voice keeps its text node (app.js rewrites it), so the reactor is drawn
    entirely with pseudo-elements: ::before is the glowing core plus concentric
    rings via box-shadow, ::after is the ripple shown while listening. */
+/* The orb behind it carries the visuals, so the button itself is a transparent
+   hit target with its label at the bottom. Its text node is rewritten by the
+   app, which is why no markup may live inside it. */
 #voice{
-  margin-right:auto;position:relative;width:132px;height:118px;padding:74px 0 0;
+  position:relative;z-index:1;width:118px;height:118px;padding:86px 0 0;
   border:0;background:none;color:var(--muted);font-size:.58rem;letter-spacing:.16em;
   clip-path:none;text-align:center;overflow:visible;
 }
-#voice::before{
-  content:"";position:absolute;top:14px;left:50%;width:40px;height:40px;margin-left:-20px;
-  border-radius:50%;
-  background:radial-gradient(circle,#eafcff 0%,var(--cyan) 42%,var(--cyan-dim) 100%);
-  box-shadow:
-    0 0 0 9px rgba(77,216,255,.09),
-    0 0 0 10px rgba(77,216,255,.30),
-    0 0 0 20px rgba(77,216,255,.07),
-    0 0 0 21px rgba(77,216,255,.16),
-    0 0 22px rgba(77,216,255,.7), 0 0 46px rgba(77,216,255,.32);
-  animation:breathe 3.6s ease-in-out infinite;
-}
-@keyframes breathe{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.07);opacity:1}}
 #voice:hover:not(:disabled){background:none;color:var(--ice)}
-#voice:disabled{opacity:.45}
+#voice:disabled{opacity:.5}
 #voice.listening{color:var(--bad)}
-#voice.listening::before{
-  background:radial-gradient(circle,#fff 0%,#ff9a9a 40%,#a33 100%);
-  box-shadow:
-    0 0 0 9px rgba(255,143,143,.10),0 0 0 10px rgba(255,143,143,.34),
-    0 0 0 20px rgba(255,143,143,.08),0 0 0 21px rgba(255,143,143,.18),
-    0 0 26px rgba(255,120,120,.8),0 0 54px rgba(255,90,90,.4);
-  animation:breathe 1s ease-in-out infinite;
-}
-#voice.listening::after,body.jarvis-speaking #voice::after{
-  content:"";position:absolute;top:4px;left:50%;width:60px;height:60px;margin-left:-30px;
-  border-radius:50%;border:1px solid var(--cyan);animation:ripple 1.5s ease-out infinite;
-}
-#voice.listening::after{border-color:var(--bad)}
-@keyframes ripple{0%{transform:scale(.5);opacity:.85}100%{transform:scale(1.6);opacity:0}}
 #voice.transcribing{color:var(--amber)}
-#voice.transcribing::before{
-  background:radial-gradient(circle,#fff5e0 0%,var(--amber) 45%,#8a5410 100%);
-  box-shadow:0 0 0 10px rgba(255,179,71,.22),0 0 24px rgba(255,179,71,.6);
-  animation:breathe 1.4s ease-in-out infinite;
-}
-/* while JARVIS speaks, the core pulses cyan (class synced from speechActive) */
-body.jarvis-speaking #voice::before{animation:breathe 1.5s ease-in-out infinite}
+#voice::after{content:"";position:absolute;inset:24px;border-radius:50%;border:1px solid transparent}
+#voice.listening::after{border-color:var(--bad);animation:ripple 1.5s ease-out infinite}
+@keyframes ripple{0%{transform:scale(.5);opacity:.85}100%{transform:scale(1.5);opacity:0}}
+/* Listening and transcribing recolour the orb through the slot wrapper. */
+.orb-slot:has(#voice.listening) .stroke-seg,
+.orb-slot:has(#voice.listening) .stroke-seg-thin{stroke:var(--bad)}
+.orb-slot:has(#voice.listening) .core-hot{fill:#ffdada}
+.orb-slot:has(#voice.transcribing) .stroke-seg{stroke:var(--amber)}
+.orb-slot:has(#voice:disabled) .orb-voice{opacity:.35}
 
 #conversation.active{border-color:var(--amber);background:rgba(255,179,71,.14);color:#ffe2b8}
 #conversation.hearing{border-color:var(--bad);background:rgba(255,143,143,.16);color:#ffd7d7}

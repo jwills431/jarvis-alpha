@@ -17,10 +17,45 @@
     </div>
     <button id="boot-start" type="button">Initiate</button>
   </div>
+  <svg id="orb-sprite" aria-hidden="true" focusable="false" width="0" height="0">
+    <symbol id="orb" viewBox="0 0 200 200">
+      <g class="ring rot-cw-slow"><g class="amp amp-outer">
+        <circle cx="100" cy="100" r="92" class="stroke-faint" stroke-dasharray="1 5"/>
+        <circle cx="100" cy="100" r="88" class="stroke-faint" stroke-dasharray="1 9"/>
+      </g></g>
+      <g class="ring rot-ccw-slow"><g class="amp amp-outer">
+        <circle cx="100" cy="100" r="84" class="stroke-soft" stroke-dasharray="3 7"/>
+      </g></g>
+      <g class="ring rot-cw-mid"><g class="amp amp-seg">
+        <circle cx="100" cy="100" r="70" class="stroke-seg" stroke-dasharray="9 5"/>
+      </g></g>
+      <g class="ring rot-ccw-mid"><g class="amp amp-seg">
+        <circle cx="100" cy="100" r="60" class="stroke-seg-thin" stroke-dasharray="4 6"/>
+      </g></g>
+      <g class="ring rot-cw-fast"><g class="amp amp-inner">
+        <circle cx="100" cy="100" r="49" class="stroke-soft" stroke-dasharray="2 4"/>
+      </g></g>
+      <g class="core">
+        <circle cx="100" cy="100" r="34" class="core-fill"/>
+        <g class="rot-ccw-mid">
+          <circle cx="100" cy="100" r="34" class="stroke-soft"/>
+          <ellipse cx="100" cy="100" rx="34" ry="12" class="stroke-faint"/>
+          <ellipse cx="100" cy="100" rx="34" ry="24" class="stroke-faint"/>
+          <ellipse cx="100" cy="100" rx="12" ry="34" class="stroke-faint"/>
+          <ellipse cx="100" cy="100" rx="24" ry="34" class="stroke-faint"/>
+          <circle cx="100" cy="66" r="1.6" class="node"/><circle cx="100" cy="134" r="1.6" class="node"/>
+          <circle cx="66" cy="100" r="1.6" class="node"/><circle cx="134" cy="100" r="1.6" class="node"/>
+          <circle cx="124" cy="76" r="1.2" class="node"/><circle cx="76" cy="124" r="1.2" class="node"/>
+        </g>
+        <circle cx="100" cy="100" r="9" class="core-hot"/>
+      </g>
+    </symbol>
+  </svg>
+  <svg class="orb-bg" aria-hidden="true" focusable="false" viewBox="0 0 200 200"><use href="#orb"/></svg>
   <main>
     <header><div><h1>JARVIS</h1><p class="tagline">Local · private</p></div><div class="header-actions"><button id="memory-menu-toggle" type="button" aria-expanded="false" aria-controls="memory-group" hidden>Memory ▾</button><div id="memory-group"><button id="auto-memory-toggle" type="button" disabled aria-pressed="true">Auto memory on</button><button id="learn-toggle" type="button" disabled aria-pressed="false">Learn mode</button><button id="memory-toggle" type="button" disabled aria-haspopup="dialog">Memory</button></div><button id="speech-settings-toggle" type="button" disabled aria-haspopup="dialog">Speech</button><span id="status">Checking…</span></div></header>
     <section id="messages" aria-live="polite"><article class="assistant">Ready when the local model is online.</article></section>
-    <form id="chat"><label for="prompt">Message</label><textarea id="prompt" maxlength="8000" rows="3" required aria-describedby="chat-hint voice-hint conversation-hint speech-hint auto-memory-hint learn-hint"></textarea><p id="chat-hint" aria-live="polite">Enter to send · Shift+Enter for a new line</p><p id="voice-hint" aria-live="polite">Hold the microphone button while speaking. Recognized speech is submitted automatically.</p><p id="conversation-hint" aria-live="polite">Conversation mode is off. When enabled, say “Goodbye, JARVIS” to close the microphone.</p><p id="speech-hint" aria-live="polite">JARVIS streams each reply using the configured local voice.</p><p id="auto-memory-hint" aria-live="polite">Automatic local memory is checking durable user facts only.</p><p id="learn-hint" aria-live="polite">Learn mode is off. Turn it on before a guided get-to-know-you conversation.</p><div id="memory-notice" hidden role="status" aria-live="polite"><span id="memory-notice-text"></span><button id="memory-notice-undo" type="button">Undo</button></div><div><button id="voice" type="button" disabled aria-pressed="false">Hold to talk</button><button id="conversation" type="button" disabled aria-pressed="false">Conversation mode</button><button id="speech-toggle" type="button" disabled aria-pressed="true">Voice on</button><button id="stop-speech" type="button" disabled>Stop speaking</button><button id="copy-chat" type="button">Copy chat</button><button id="clear" type="button">Clear</button><button id="send" type="submit">Send</button></div></form>
+    <form id="chat"><label for="prompt">Message</label><textarea id="prompt" maxlength="8000" rows="3" required aria-describedby="chat-hint voice-hint conversation-hint speech-hint auto-memory-hint learn-hint"></textarea><p id="chat-hint" aria-live="polite">Enter to send · Shift+Enter for a new line</p><p id="voice-hint" aria-live="polite">Hold the microphone button while speaking. Recognized speech is submitted automatically.</p><p id="conversation-hint" aria-live="polite">Conversation mode is off. When enabled, say “Goodbye, JARVIS” to close the microphone.</p><p id="speech-hint" aria-live="polite">JARVIS streams each reply using the configured local voice.</p><p id="auto-memory-hint" aria-live="polite">Automatic local memory is checking durable user facts only.</p><p id="learn-hint" aria-live="polite">Learn mode is off. Turn it on before a guided get-to-know-you conversation.</p><div id="memory-notice" hidden role="status" aria-live="polite"><span id="memory-notice-text"></span><button id="memory-notice-undo" type="button">Undo</button></div><div><span class="orb-slot"><svg class="orb-voice" aria-hidden="true" focusable="false" viewBox="0 0 200 200"><use href="#orb"/></svg><button id="voice" type="button" disabled aria-pressed="false">Hold to talk</button></span><button id="conversation" type="button" disabled aria-pressed="false">Conversation mode</button><button id="speech-toggle" type="button" disabled aria-pressed="true">Voice on</button><button id="stop-speech" type="button" disabled>Stop speaking</button><button id="copy-chat" type="button">Copy chat</button><button id="clear" type="button">Clear</button><button id="send" type="submit">Send</button></div></form>
   </main>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <div id="memory-backdrop" hidden>
