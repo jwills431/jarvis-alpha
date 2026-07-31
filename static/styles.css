@@ -136,19 +136,26 @@ main{position:relative;z-index:1}
 .orb-slot{position:relative;display:inline-grid;place-items:center;margin-right:auto;
   width:118px;height:118px}
 .orb-voice{position:absolute;width:118px;height:118px;opacity:.92}
-/* The background copy is decorative only: thinner strokes keep it from competing
-   with the conversation sitting on top of it. */
-.orb-bg .stroke-seg{stroke-width:4}
-.orb-bg .node,.orb-bg .core-hot{opacity:.5}
-
-.orb-bg g,.orb-voice g{transform-box:view-box;transform-origin:100px 100px}
-.stroke-faint{fill:none;stroke:var(--cyan);stroke-width:.7;opacity:.34}
-.stroke-soft{fill:none;stroke:var(--cyan);stroke-width:1;opacity:.5}
-.stroke-seg{fill:none;stroke:var(--cyan);stroke-width:7;opacity:.34}
-.stroke-seg-thin{fill:none;stroke:var(--cyan);stroke-width:3;opacity:.4}
-.node{fill:var(--ice);opacity:.85}
+/* IMPORTANT: <use> clones the symbol into a shadow tree. Descendant selectors
+   (.orb-bg .stroke-seg) do NOT cross that boundary, so every rule below targets
+   the cloned elements by their own class, and anything that must differ between
+   the two instances travels as a custom property — those DO inherit through the
+   shadow boundary. Setting transform-origin via a descendant selector was what
+   made the rings orbit the centre instead of spinning in place. */
+.ring,.core,.rot-cw-slow,.rot-ccw-slow,.rot-cw-mid,.rot-ccw-mid,.rot-cw-fast,.amp{
+  transform-box:view-box;transform-origin:100px 100px;
+}
+.stroke-faint{fill:none;stroke:var(--orb-stroke,var(--cyan));stroke-width:.7;opacity:.34}
+.stroke-soft{fill:none;stroke:var(--orb-stroke,var(--cyan));stroke-width:1;opacity:.5}
+.stroke-seg{fill:none;stroke:var(--orb-stroke,var(--cyan));stroke-width:var(--orb-seg-w,7);
+  opacity:var(--orb-seg-op,.34)}
+.stroke-seg-thin{fill:none;stroke:var(--orb-stroke,var(--cyan));stroke-width:3;opacity:.4}
+.node{fill:var(--ice);opacity:var(--orb-node-op,.85)}
 .core-fill{fill:rgba(77,216,255,.10)}
-.core-hot{fill:var(--ice);opacity:.9}
+.core-hot{fill:var(--orb-hot,var(--ice));opacity:var(--orb-hot-op,.9)}
+/* The background copy is decorative: thinner strokes and dimmer nodes keep it
+   from competing with the conversation sitting on top of it. */
+.orb-bg{--orb-seg-w:4;--orb-node-op:.5;--orb-hot-op:.5}
 
 .rot-cw-slow{animation:orbspin 90s linear infinite}
 .rot-ccw-slow{animation:orbspin 70s linear infinite reverse}
@@ -166,8 +173,9 @@ main{position:relative;z-index:1}
 .orb-voice{transform:scale(calc(1 + var(--amp) * .07));transform-origin:50% 50%;
   transition:transform .07s linear}
 .orb-bg{transition:transform .07s linear}
-body.jarvis-speaking .core-hot{opacity:calc(.75 + var(--amp) * .25)}
-body.jarvis-speaking .stroke-seg{opacity:calc(.34 + var(--amp) * .45)}
+/* Custom properties, not descendant selectors, so these reach the cloned orb. */
+body.jarvis-speaking{--orb-hot-op:calc(.75 + var(--amp) * .25);
+  --orb-seg-op:calc(.34 + var(--amp) * .45)}
 
 /* ---------- the arc reactor (push to talk) ----------
    #voice keeps its text node (app.js rewrites it), so the reactor is drawn
@@ -188,11 +196,10 @@ body.jarvis-speaking .stroke-seg{opacity:calc(.34 + var(--amp) * .45)}
 #voice::after{content:"";position:absolute;inset:24px;border-radius:50%;border:1px solid transparent}
 #voice.listening::after{border-color:var(--bad);animation:ripple 1.5s ease-out infinite}
 @keyframes ripple{0%{transform:scale(.5);opacity:.85}100%{transform:scale(1.5);opacity:0}}
-/* Listening and transcribing recolour the orb through the slot wrapper. */
-.orb-slot:has(#voice.listening) .stroke-seg,
-.orb-slot:has(#voice.listening) .stroke-seg-thin{stroke:var(--bad)}
-.orb-slot:has(#voice.listening) .core-hot{fill:#ffdada}
-.orb-slot:has(#voice.transcribing) .stroke-seg{stroke:var(--amber)}
+/* Listening and transcribing recolour the orb by setting inherited properties on
+   the wrapper; the values cross into the cloned content, unlike a selector. */
+.orb-slot:has(#voice.listening){--orb-stroke:var(--bad);--orb-hot:#ffdada}
+.orb-slot:has(#voice.transcribing){--orb-stroke:var(--amber);--orb-hot:#ffe6bd}
 .orb-slot:has(#voice:disabled) .orb-voice{opacity:.35}
 
 #conversation.active{border-color:var(--amber);background:rgba(255,179,71,.14);color:#ffe2b8}
