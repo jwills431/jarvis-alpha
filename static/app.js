@@ -1897,17 +1897,21 @@ document.addEventListener('keydown', unlockAudio, {once: true});
   const boot = document.querySelector('#boot');
   const start = document.querySelector('#boot-start');
   if (!boot || !start) return;
-  if (window.matchMedia('(prefers-reduced-motion:reduce)').matches) { boot.remove(); return; }
+  // Reduced motion suppresses the ANIMATION, not the control: the button is how
+  // audio gets unlocked, so removing it would leave no way to start the greeting.
+  // With motion reduced the overlay simply appears complete and ready at once.
+  const reduced = window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  if (reduced) boot.classList.add('static');
   const activate = () => {
     unlockAudio();
     boot.classList.add('dismissed');
-    setTimeout(() => boot.remove(), 700);
+    setTimeout(() => boot.remove(), reduced ? 0 : 700);
     promptEl.focus();
   };
   start.addEventListener('click', activate, {once: true});
-  // Focus the control once it has faded in: Enter and Space then activate it,
-  // so the overlay is never a keyboard trap and needs no document-wide handler.
-  setTimeout(() => { try { start.focus(); } catch { /* focus is best-effort */ } }, 2600);
+  // Focus the control once it is visible: Enter and Space then activate it, so the
+  // overlay is never a keyboard trap and needs no document-wide handler.
+  setTimeout(() => { try { start.focus(); } catch { /* focus is best-effort */ } }, reduced ? 0 : 2600);
 })();
 setupMemoryMenu();
 watchStatusHints();

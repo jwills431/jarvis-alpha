@@ -315,6 +315,11 @@ body.jarvis-speaking #voice::before{animation:breathe 1.5s ease-in-out infinite}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
-  #boot{display:none}
   body::after{display:none}
 }
+/* Animations are what reduced motion disables, so anything that FADES IN must be
+   given its final appearance explicitly — otherwise it stays at opacity 0 and the
+   activation button becomes invisible but still present. */
+#boot.static .boot-lines div,#boot.static #boot-start{opacity:1}
+/* Scoped to the static case only, so the normal fade-out still plays. */
+#boot.static.dismissed{display:none}
