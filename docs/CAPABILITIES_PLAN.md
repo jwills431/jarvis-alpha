@@ -20,12 +20,57 @@ decisions made deliberately earlier:
 - **Reminders and timers currently get a deterministic refusal** (`unsupportedActionResponse`
   in `core.js`). Stage 1 removes that refusal — the first capability JARVIS gains
   is one it currently, honestly, says it cannot do.
-- **"Nothing leaves this machine" ends at Stage 2.** A web search means the query
-  and the user's IP reach a third party. That is a real privacy trade, not a
-  technicality, and it should be an explicit toggle rather than an assumption.
+- **Stage 2 is the only stage with any egress at all.** Everything else —
+  timers, files, machine control, LAN devices — is entirely local. And the thing
+  that leaves at Stage 2 is a *search string*, not the conversation. See the
+  privacy architecture below; this is narrower than it first sounds.
 - **Prompt injection becomes the dominant security concern** the moment JARVIS
   reads anything it did not generate — a web page, a PDF, a file. Content is not
   instruction. This is designed in at Stage 2 and never relaxed.
+
+---
+
+## Privacy architecture — what the local-first goal actually requires
+
+The point of running this on your own hardware is that **no third party retains
+anything about you or builds a profile from it**. That is achievable in full. It
+should not be confused with "no packet ever leaves the house", which is only
+achievable by giving up web access entirely — and, as it turns out, is not
+necessary.
+
+**Never leaves the machine, at any stage:** the conversation, the memory ledger,
+recorded audio, transcripts, the synthesised voice, and all model reasoning. The
+LLM, STT, and TTS are local processes; they have no network path to anyone.
+
+**Leaves only on an explicit lookup:** a search string, and a request to fetch a
+URL. That is the same exposure as typing into a browser — and unlike a browser,
+there is no account, no cookie jar, and no history syncing alongside it.
+
+Hardening, roughly in order of effort:
+
+1. **Self-hosted SearXNG** on this box. It queries public engines and strips the
+   identifying layer: no account, no cookies, no per-user profile. Engines see a
+   query from an IP, not "Joseph asked this, add it to his file". Removes the
+   single largest profiling risk for near-zero ongoing cost.
+2. **Route SearXNG's egress through a VPN or Tor.** Now the IP is decoupled too,
+   so the query is not merely unattributed but unlocatable. One config change
+   once SearXNG exists.
+3. **Cache aggressively.** A result that is already on disk costs no egress at
+   all, and repeated questions are common.
+4. **Offline corpora for the common case.** A local Wikipedia dump via Kiwix
+   (~100 GB full, far less for a text-only subset) answers a large share of
+   factual questions with *literally zero* egress, and the 4 TB drive can hold it.
+   Same idea for documentation sets. Worth doing regardless — it is faster than
+   the network as well as private.
+5. **Domain allowlist / blocklist**, so a fetch cannot wander somewhere unexpected.
+6. **Egress visible and logged.** Every outbound request marked in the transcript
+   and written to the audit log, so "did that stay local?" is never a guess.
+
+A reasonable end state: **Kiwix answers most factual questions offline; SearXNG
+behind a VPN handles the rest; nothing about the conversation itself ever leaves.**
+That is meaningfully stronger than any hosted assistant can offer, because the
+part that is actually sensitive — what you said, what it remembers about you —
+is never transmitted at all.
 
 ---
 
@@ -81,8 +126,12 @@ app restart, and JARVIS stops issuing the old refusal.
 The first capability that sends data off the machine, and the first that lets
 untrusted text near the model.
 
-- **Search**: self-hosted SearXNG (keeps queries off a single provider's account,
-  runs on this box) or a plain API key. Self-hosted is more work, more private.
+- **Offline first.** Try the local corpus (Kiwix/Wikipedia) before the network.
+  Many questions never need to leave, and the local answer is faster.
+- **Search**: self-hosted SearXNG on this box — no account, no cookies, no
+  profile, and optionally routed through a VPN. A hosted API key is the easy
+  path but reintroduces exactly the third-party retention this project exists to
+  avoid; prefer SearXNG.
 - **Fetch + extract**: retrieve a page, strip to readable text, cap the size.
 - **Injection defence, non-negotiable:** fetched text is wrapped and labelled as
   untrusted data, never merged into the system prompt. The model is instructed —
@@ -146,6 +195,7 @@ its own decision about what is stored and where.
 
 | Concern | Position |
 |---|---|
+| Privacy | Conversation, memory, audio and reasoning never leave. Only lookups do, and only on request. Offline corpus first, then SearXNG, ideally behind a VPN. |
 | Prompt injection | Untrusted content is labelled and never becomes instruction. Regression-tested. |
 | Confirmation | Anything with side effects is proposed, not performed. |
 | Visibility | Every call and every byte that leaves the machine is in the transcript. |
