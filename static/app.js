@@ -375,10 +375,60 @@ function getAudioContext() {
   return audioCtx;
 }
 
+// --- Spoken greeting on start-up -------------------------------------------
+//
+// Browsers refuse to play audio until the page has had a user gesture, so the
+// greeting cannot fire on load alone: it waits until audio is unlocked AND the
+// speech engine reports ready, then speaks once per page load. A different line
+// is chosen each time (and never the same one twice in a row) so start-up does
+// not become rote.
+const GREETINGS = [
+  '{t}, sir. All systems are online and functioning within normal parameters.',
+  'Systems coming online. Diagnostics complete, all functions nominal. How may I assist you today, sir?',
+  '{t}, sir. Local model, speech synthesis, and recognition are all resident and ready.',
+  'Powering up. All subsystems report ready. What can I do for you, sir?',
+  '{t}, sir. I am online and standing by.',
+  'Initialization complete. Everything is running as expected, sir. How can I help?',
+  'All systems tested and ready, sir. Awaiting your instruction.',
+  '{t}. Local systems are green across the board. What shall we work on, sir?',
+  'Online and at your service, sir. Everything checks out.',
+];
+let greeted = false;
+
+function timeOfDayGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function pickGreeting() {
+  const last = storedSpeechSetting('jarvis.greeting.last');
+  let choices = GREETINGS.filter((line) => line !== last);
+  if (!choices.length) choices = GREETINGS;
+  const line = choices[Math.floor(Math.random() * choices.length)];
+  storeSpeechSetting('jarvis.greeting.last', line);
+  return line.replace('{t}', timeOfDayGreeting());
+}
+
+function maybeGreet() {
+  if (greeted || !audioUnlocked || !speechEnabled || !speechReady) return;
+  greeted = true;
+  const line = pickGreeting();
+  // Shown in the transcript but deliberately NOT added to `history`: this is
+  // JARVIS greeting the room, not a turn the model should later treat as context.
+  addMessage('assistant', line);
+  const requestId = ++speechRequestId;
+  speechQueue = Promise.resolve();
+  speechRenderChain = Promise.resolve();
+  queueSpeech(line, requestId, 'JARVIS is coming online.');
+}
+
 function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true;
   getAudioContext();  // create + resume the Web Audio context within the gesture
+  setTimeout(maybeGreet, 60);  // speech may not be reported ready until the first poll
   try {
     const url = URL.createObjectURL(silentWavBlob());
     const audio = new Audio(url);
@@ -700,6 +750,9 @@ async function checkHealth() {
     if (!audioState && !voiceEl.classList.contains('transcribing')) voiceEl.disabled = !voiceReady || sendEl.disabled || conversationEnabled;
     conversationEl.disabled = !voiceReady || conversationStarting || (!conversationEnabled && sendEl.disabled);
     speechReady = response.ok && state.tts === 'ready';
+    // The greeting waits for whichever happens last: the unlocking gesture, or
+    // the speech engine finishing its warm-up.
+    if (speechReady) maybeGreet();
     speechToggleEl.disabled = !speechReady;
     speechSettingsToggleEl.disabled = !speechReady || !speechOptionsReady;
     if (speechReady && !speechOptionsReady) void loadSpeechOptions();
@@ -1837,6 +1890,24 @@ function setupMemoryMenu() {
 // first spoken reply isn't silently blocked by the browser's autoplay policy.
 document.addEventListener('pointerdown', unlockAudio, {once: true});
 document.addEventListener('keydown', unlockAudio, {once: true});
+// The boot overlay is the unlocking gesture: dismissing it is what permits the
+// spoken greeting. It is decorative, so it is removed outright when motion is
+// reduced or if scripting somehow fails to reach this point.
+(() => {
+  const boot = document.querySelector('#boot');
+  if (!boot) return;
+  if (window.matchMedia('(prefers-reduced-motion:reduce)').matches) { boot.remove(); return; }
+  boot.classList.add('ready');
+  const dismiss = () => {
+    unlockAudio();
+    boot.classList.add('dismissed');
+    setTimeout(() => boot.remove(), 700);
+    promptEl.focus();
+  };
+  boot.addEventListener('click', dismiss, {once: true});
+  // Any key also works, so the keyboard is never trapped behind the overlay.
+  document.addEventListener('keydown', dismiss, {once: true});
+})();
 setupMemoryMenu();
 watchStatusHints();
 // Mirror the speaking state onto <body> so the arc reactor can pulse while JARVIS
