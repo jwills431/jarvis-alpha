@@ -7,13 +7,15 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div id="boot" aria-hidden="true">
-    <div>&gt; INITIALIZING J.A.R.V.I.S.</div>
-    <div>&gt; LOCAL MODEL ............ ONLINE</div>
-    <div>&gt; SPEECH SYNTHESIS ....... ONLINE</div>
-    <div>&gt; RECOGNITION ............ ONLINE</div>
-    <div>&gt; AT YOUR SERVICE, SIR.</div>
-    <div id="boot-prompt">[ TAP TO ENGAGE ]</div>
+  <div id="boot">
+    <div class="boot-lines" aria-hidden="true">
+      <div>&gt; INITIALIZING J.A.R.V.I.S.</div>
+      <div>&gt; LOCAL MODEL ............ ONLINE</div>
+      <div>&gt; SPEECH SYNTHESIS ....... ONLINE</div>
+      <div>&gt; RECOGNITION ............ ONLINE</div>
+      <div>&gt; STANDING BY.</div>
+    </div>
+    <button id="boot-start" type="button">Initiate</button>
   </div>
   <main>
     <header><div><h1>JARVIS</h1><p class="tagline">Local · private</p></div><div class="header-actions"><button id="memory-menu-toggle" type="button" aria-expanded="false" aria-controls="memory-group" hidden>Memory ▾</button><div id="memory-group"><button id="auto-memory-toggle" type="button" disabled aria-pressed="true">Auto memory on</button><button id="learn-toggle" type="button" disabled aria-pressed="false">Learn mode</button><button id="memory-toggle" type="button" disabled aria-haspopup="dialog">Memory</button></div><button id="speech-settings-toggle" type="button" disabled aria-haspopup="dialog">Speech</button><span id="status">Checking…</span></div></header>

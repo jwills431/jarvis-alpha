@@ -1895,18 +1895,19 @@ document.addEventListener('keydown', unlockAudio, {once: true});
 // reduced or if scripting somehow fails to reach this point.
 (() => {
   const boot = document.querySelector('#boot');
-  if (!boot) return;
+  const start = document.querySelector('#boot-start');
+  if (!boot || !start) return;
   if (window.matchMedia('(prefers-reduced-motion:reduce)').matches) { boot.remove(); return; }
-  boot.classList.add('ready');
-  const dismiss = () => {
+  const activate = () => {
     unlockAudio();
     boot.classList.add('dismissed');
     setTimeout(() => boot.remove(), 700);
     promptEl.focus();
   };
-  boot.addEventListener('click', dismiss, {once: true});
-  // Any key also works, so the keyboard is never trapped behind the overlay.
-  document.addEventListener('keydown', dismiss, {once: true});
+  start.addEventListener('click', activate, {once: true});
+  // Focus the control once it has faded in: Enter and Space then activate it,
+  // so the overlay is never a keyboard trap and needs no document-wide handler.
+  setTimeout(() => { try { start.focus(); } catch { /* focus is best-effort */ } }, 2600);
 })();
 setupMemoryMenu();
 watchStatusHints();
