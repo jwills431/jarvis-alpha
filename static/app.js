@@ -824,15 +824,17 @@ async function checkHealth() {
     if (!audioState && !voiceEl.classList.contains('transcribing')) voiceEl.disabled = !voiceReady || sendEl.disabled || conversationEnabled;
     conversationEl.disabled = !voiceReady || conversationStarting || (!conversationEnabled && sendEl.disabled);
     speechReady = response.ok && state.tts === 'ready';
-    // The greeting waits for whichever happens last: the unlocking gesture, or
-    // the speech engine finishing its warm-up.
-    if (speechReady) maybeGreet();
     speechToggleEl.disabled = !speechReady;
     speechSettingsToggleEl.disabled = !speechReady || !speechOptionsReady;
     if (speechReady && !speechOptionsReady) void loadSpeechOptions();
     speechToggleEl.textContent = speechEnabled ? 'Voice on' : 'Voice muted';
     speechToggleEl.setAttribute('aria-pressed', speechEnabled ? 'true' : 'false');
     playbackMode = state.playback === 'browser' ? 'browser' : 'host';
+    // Greet only AFTER playbackMode is known. Greeting earlier queued speech
+    // while the mode was still its 'host' default, so the client asked for the
+    // audio and then discarded it, expecting a server-side device to play it —
+    // the greeting appeared in the transcript but was never heard.
+    if (speechReady) maybeGreet();
     // In browser mode the server's own "speaking" flag stays false (no host
     // channel is used), so local pending/playing state is the source of truth.
     const streamPlaying = Boolean(audioCtx) && streamClock > audioCtx.currentTime;
