@@ -234,25 +234,36 @@ body.jarvis-speaking{--orb-hot-op:calc(.75 + var(--amp) * .25);
 #boot{
   position:fixed;inset:0;z-index:100;background:var(--void);display:grid;place-items:center;
   align-content:center;font-family:var(--mono);color:var(--cyan);cursor:pointer;
+  padding:16px;overflow:hidden;
 }
 #boot.dismissed{animation:bootout .6s ease forwards;pointer-events:none}
-#boot .boot-lines div{font-size:.7rem;letter-spacing:.16em;line-height:2;opacity:0;
-  animation:typein .3s ease forwards}
-#boot .boot-lines div:nth-child(1){animation-delay:.15s}
-#boot .boot-lines div:nth-child(2){animation-delay:.55s}
-#boot .boot-lines div:nth-child(3){animation-delay:.95s}
-#boot .boot-lines div:nth-child(4){animation-delay:1.35s}
-#boot .boot-lines div:nth-child(5){animation-delay:1.75s;color:var(--ice)}
+/* Lines are typed in by script, so they start hidden and are revealed as the
+   sequence reaches each one. Height is reserved with min-height so the block
+   does not jump as lines appear. */
+/* Scales with the viewport so the readout is legible on a monitor without the
+   fixed-width monospace lines overflowing a phone. */
+#boot .boot-lines div{font-size:clamp(.56rem,2.6vw,.82rem);
+  letter-spacing:clamp(.04em,.55vw,.16em);line-height:2;opacity:0;
+  min-height:1.4em;white-space:pre}
+#boot .boot-lines div:last-child{color:var(--ice)}
+.boot-value{color:var(--good)}
+.boot-cursor{display:inline-block;width:.55em;height:1em;margin-left:.1em;
+  background:currentColor;vertical-align:-.15em;animation:cursorblink .45s step-end infinite}
+@keyframes cursorblink{0%,100%{opacity:1}50%{opacity:0}}
 /* The activation control: a wide HUD button that fades in after the readout. */
 #boot-start{
-  margin-top:26px;padding:15px 46px;font-family:var(--mono);font-size:.78rem;
-  letter-spacing:.42em;text-transform:uppercase;color:var(--ice);
+  margin-top:clamp(18px,4vh,30px);padding:clamp(12px,2.2vh,16px) clamp(28px,9vw,52px);
+  font-family:var(--mono);font-size:clamp(.66rem,3vw,.86rem);
+  letter-spacing:clamp(.22em,1.4vw,.45em);text-transform:uppercase;color:var(--ice);
   border:1px solid rgba(77,216,255,.55);background:rgba(77,216,255,.10);cursor:pointer;
   clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px);
   box-shadow:0 0 22px rgba(77,216,255,.18),inset 0 0 22px rgba(77,216,255,.07);
-  opacity:0;animation:typein .4s ease 2.2s forwards,glowpulse 2.6s ease-in-out 2.8s infinite;
-  transition:background .18s,border-color .18s,box-shadow .18s;
+  opacity:0;pointer-events:none;
+  transition:background .18s,border-color .18s,box-shadow .18s,opacity .35s ease;
 }
+/* Revealed by script once the readout finishes typing, so it cannot be pressed
+   before the greeting has had time to render. */
+#boot-start.shown{opacity:1;pointer-events:auto;animation:glowpulse 2.6s ease-in-out .6s infinite}
 #boot-start:hover,#boot-start:focus-visible{
   background:rgba(77,216,255,.2);border-color:var(--cyan);outline:none;
   box-shadow:0 0 34px rgba(77,216,255,.4),inset 0 0 26px rgba(77,216,255,.12);
@@ -415,6 +426,6 @@ body.jarvis-speaking{--orb-hot-op:calc(.75 + var(--amp) * .25);
 /* Animations are what reduced motion disables, so anything that FADES IN must be
    given its final appearance explicitly — otherwise it stays at opacity 0 and the
    activation button becomes invisible but still present. */
-#boot.static .boot-lines div,#boot.static #boot-start{opacity:1}
-/* Scoped to the static case only, so the normal fade-out still plays. */
+/* Line and button visibility are driven by the typing sequence now, so .static
+   only governs how the overlay leaves. Scoped so the normal fade-out still plays. */
 #boot.static.dismissed{display:none}

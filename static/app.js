@@ -496,12 +496,66 @@ function pickGreeting() {
   return line.replace('{t}', timeOfDayGreeting());
 }
 
-function maybeGreet() {
-  if (greeted || !audioUnlocked || !speechEnabled || !speechReady) return;
+// The greeting is rendered ahead of time, while the boot overlay is still up,
+// so that pressing Initiate can play an audio element synchronously inside the
+// click handler. Browsers grant playback most reliably to audio started
+// directly by a gesture; going out to the network first and playing on the
+// response is exactly the pattern autoplay policies block.
+let greetingLine = null;
+let greetingBlob = null;
+let greetingFetching = false;
+let greetingPending = false;   // Initiate pressed before the render finished
+
+async function prefetchGreeting() {
+  if (greetingBlob || greetingFetching || greeted) return;
+  if (!speechEnabled || !speechReady || playbackMode !== 'browser') return;
+  greetingFetching = true;
+  try {
+    const line = pickGreeting();
+    const response = await fetch('/api/speak', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(speechPayload(line)),
+    });
+    if (response.ok) {
+      greetingBlob = await response.blob();
+      greetingLine = line;
+    }
+  } catch { /* the greeting is a nicety; never block start-up on it */ }
+  greetingFetching = false;
+  // Initiate may have been pressed while this was still rendering; play as soon
+  // as it lands rather than falling back to the queue, which iOS blocks.
+  if (greetingPending && greetingBlob) { greetingPending = false; playGreetingNow(); }
+}
+
+// Called from the Initiate handler, so this runs inside the user gesture.
+function playGreetingNow() {
+  if (greeted || !greetingBlob || !speechEnabled) return false;
   greeted = true;
-  const line = pickGreeting();
   // Shown in the transcript but deliberately NOT added to `history`: this is
   // JARVIS greeting the room, not a turn the model should later treat as context.
+  addMessage('assistant', greetingLine);
+  const url = URL.createObjectURL(greetingBlob);
+  const audio = new Audio(url);
+  currentAudio = audio;
+  const done = () => {
+    try { URL.revokeObjectURL(url); } catch { /* already released */ }
+    if (currentAudio === audio) currentAudio = null;
+  };
+  audio.onended = done;
+  audio.onerror = done;
+  audio.play().catch(done);
+  greetingBlob = null;
+  return true;
+}
+
+// Fallback for when speech was not ready in time to pre-render: greet through
+// the normal queue once it is. Less reliable on iOS, hence the path above.
+function maybeGreet() {
+  if (greeted || !audioUnlocked || !speechEnabled || !speechReady) return;
+  if (greetingBlob) { playGreetingNow(); return; }
+  greeted = true;
+  const line = pickGreeting();
   addMessage('assistant', line);
   const requestId = ++speechRequestId;
   speechQueue = Promise.resolve();
@@ -845,7 +899,7 @@ async function checkHealth() {
     // while the mode was still its 'host' default, so the client asked for the
     // audio and then discarded it, expecting a server-side device to play it —
     // the greeting appeared in the transcript but was never heard.
-    if (speechReady) maybeGreet();
+    if (speechReady && !greeted) { void prefetchGreeting(); maybeGreet(); }
     // In browser mode the server's own "speaking" flag stays false (no host
     // channel is used), so local pending/playing state is the source of truth.
     const streamPlaying = Boolean(audioCtx) && streamClock > audioCtx.currentTime;
@@ -1995,6 +2049,67 @@ document.addEventListener('keydown', unlockAudio, {once: true});
 // The boot overlay is the unlocking gesture: dismissing it is what permits the
 // spoken greeting. It is decorative, so it is removed outright when motion is
 // reduced or if scripting somehow fails to reach this point.
+// Types the boot readout a character at a time, pausing on a blinking cursor
+// before each status resolves. The delay is not only decorative: it gives the
+// greeting time to finish rendering, so pressing Initiate can play audio that
+// already exists rather than waiting on the network.
+const bootWait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Pacing for the start-up readout, tuned to run about ten seconds end to end
+// (roughly 140 characters at BOOT_CHAR_MS, plus three checks and the two beats).
+// The delay is deliberate: it also guarantees the greeting has finished
+// rendering before the Initiate button can be pressed.
+const BOOT_CHAR_MS = 38;      // per character
+const BOOT_CHECK_MS = 1200;   // cursor blinks here before a status resolves
+const BOOT_LEAD_MS = 400;     // beat before the first line
+const BOOT_SETTLE_MS = 700;   // beat after the last line, before the button
+
+let bootSkipped = false;
+
+function fillBootLines(boot) {
+  for (const line of boot.querySelectorAll('.boot-lines div')) {
+    line.style.opacity = '1';
+    if (line.querySelector('span')) continue;   // already typed
+    const label = document.createElement('span');
+    label.textContent = line.dataset.label || '';
+    const value = document.createElement('span');
+    value.className = 'boot-value';
+    value.textContent = line.dataset.value || '';
+    line.replaceChildren(label, value);
+  }
+}
+
+async function runBootSequence(boot, start) {
+  const lines = Array.from(boot.querySelectorAll('.boot-lines div'));
+  const cursor = document.createElement('span');
+  cursor.className = 'boot-cursor';
+  const typeInto = async (target, text, speed) => {
+    for (const character of text) {
+      if (bootSkipped) return;
+      target.textContent += character;
+      await bootWait(speed);
+    }
+  };
+  await bootWait(BOOT_LEAD_MS);
+  for (const line of lines) {
+    if (bootSkipped) break;
+    const label = document.createElement('span');
+    const value = document.createElement('span');
+    value.className = 'boot-value';
+    line.append(label, value, cursor);
+    line.style.opacity = '1';
+    await typeInto(label, line.dataset.label || '', BOOT_CHAR_MS);
+    if (line.dataset.value && !bootSkipped) {
+      await bootWait(BOOT_CHECK_MS);  // cursor blinks in place while it "checks"
+      await typeInto(value, line.dataset.value, BOOT_CHAR_MS);
+    }
+  }
+  cursor.remove();
+  fillBootLines(boot);                // completes anything a skip cut short
+  if (!bootSkipped) await bootWait(BOOT_SETTLE_MS);
+  start.classList.add('shown');
+  try { start.focus(); } catch { /* focus is best-effort */ }
+}
+
 (() => {
   const boot = document.querySelector('#boot');
   const start = document.querySelector('#boot-start');
@@ -2002,18 +2117,38 @@ document.addEventListener('keydown', unlockAudio, {once: true});
   // Reduced motion suppresses the ANIMATION, not the control: the button is how
   // audio gets unlocked, so removing it would leave no way to start the greeting.
   // With motion reduced the overlay simply appears complete and ready at once.
+  // Honour the motion preference: with it on, the readout appears complete at
+  // once rather than typing for ten seconds. Tapping anywhere also skips ahead,
+  // so the sequence is never something to sit through.
   const reduced = window.matchMedia('(prefers-reduced-motion:reduce)').matches;
-  if (reduced) boot.classList.add('static');
+  if (reduced) {
+    boot.classList.add('static');
+    bootSkipped = true;
+    fillBootLines(boot);
+    start.classList.add('shown');
+  } else {
+    void runBootSequence(boot, start);
+  }
+  boot.addEventListener('pointerdown', (event) => {
+    if (event.target === start || bootSkipped) return;
+    bootSkipped = true;
+    fillBootLines(boot);
+    start.classList.add('shown');
+  });
   const activate = () => {
     unlockAudio();
+    // Inside the gesture: play the pre-rendered greeting, or claim it for the
+    // moment it finishes rendering.
+    if (!playGreetingNow()) greetingPending = true;
     boot.classList.add('dismissed');
     setTimeout(() => boot.remove(), reduced ? 0 : 700);
     focusPrompt();
   };
   start.addEventListener('click', activate, {once: true});
-  // Focus the control once it is visible: Enter and Space then activate it, so the
-  // overlay is never a keyboard trap and needs no document-wide handler.
-  setTimeout(() => { try { start.focus(); } catch { /* focus is best-effort */ } }, reduced ? 0 : 2600);
+  // Focus follows the button becoming visible (end of the typed sequence, or
+  // immediately when motion is reduced), so Enter and Space activate it and the
+  // overlay is never a keyboard trap.
+  if (reduced) { try { start.focus(); } catch { /* focus is best-effort */ } }
 })();
 setupMemoryMenu();
 watchStatusHints();
