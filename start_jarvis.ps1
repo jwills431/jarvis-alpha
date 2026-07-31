@@ -34,7 +34,18 @@ setsid bash -c 'cd "'"$PROJ"'"; python3 -m jarvis.server > /tmp/jarvis_app.log 2
 sleep 4
 echo "app health: $(curl -s http://127.0.0.1:8787/api/health)"
 
-# 3) Fish neural TTS. The trailing sleep lets the detached process establish
+# 3) Resident speech recognizer. Spawning whisper-cli per utterance reloads the
+#    model every time (~0.9 s); keeping it resident cuts that to ~0.4-0.6 s.
+setsid bash -c '/home/jaydubya/jarvis/whisper.cpp/build/bin/whisper-server \
+  --model /home/jaydubya/jarvis/models/whisper/ggml-base.en.bin \
+  --host 127.0.0.1 --port 8088 --threads 10 --no-gpu \
+  > /tmp/jarvis_whisper.log 2>&1' < /dev/null &
+for i in $(seq 1 15); do
+  sleep 1
+  curl -sf http://127.0.0.1:8088/ > /dev/null 2>&1 && { echo "whisper ready (~${i}s)"; break; }
+done
+
+# 4) Fish neural TTS. The trailing sleep lets the detached process establish
 #    before this script exits, otherwise WSL reaps it.
 setsid bash -c 'cd /home/jaydubya/jarvis/fish-speech; .venv/bin/python -m tools.api_server --listen 127.0.0.1:8080 --half --compile --llama-checkpoint-path checkpoints/openaudio-s1-mini --decoder-checkpoint-path checkpoints/openaudio-s1-mini/codec.pth --decoder-config-name modded_dac_vq > /tmp/jarvis_fish.log 2>&1' < /dev/null &
 sleep 6

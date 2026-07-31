@@ -1754,9 +1754,90 @@ window.addEventListener('pagehide', () => {
   discardRecording();
   void fetch('/api/speak/stop', {method: 'POST', keepalive: true}).catch(() => {});
 });
+// --- Mobile: transient status toast + collapsible memory menu -----------------
+//
+// The status hints are permanent aria-live paragraphs under the composer. On a
+// phone that is space the conversation needs, so they are visually hidden there
+// and their CHANGES are surfaced briefly in a floating toast instead. Watching
+// the existing elements (rather than rerouting every call site) keeps a single
+// source of truth and cannot miss a status update.
+const toastEl = document.querySelector('#toast');
+const memoryMenuToggleEl = document.querySelector('#memory-menu-toggle');
+const memoryGroupEl = document.querySelector('#memory-group');
+let toastTimer = null;
+
+function showToast(message) {
+  if (!toastEl || !message) return;
+  toastEl.textContent = message;
+  toastEl.hidden = false;
+  // Force a frame so the transition runs when re-showing an already-visible toast.
+  void toastEl.offsetWidth;
+  toastEl.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastEl.classList.remove('visible');
+    setTimeout(() => { if (!toastEl.classList.contains('visible')) toastEl.hidden = true; }, 260);
+  }, 4200);
+}
+
+function watchStatusHints() {
+  if (!toastEl || typeof MutationObserver !== 'function') return;
+  const hints = ['#voice-hint', '#conversation-hint', '#speech-hint', '#auto-memory-hint', '#learn-hint']
+    .map((selector) => document.querySelector(selector))
+    .filter(Boolean);
+  // Seed with the initial text so the first render does not fire a toast.
+  const seen = new Map(hints.map((el) => [el, el.textContent.trim()]));
+  const observer = new MutationObserver((records) => {
+    // Only toast on small screens, where the hints are hidden.
+    if (!window.matchMedia('(max-width:700px)').matches) return;
+    for (const record of records) {
+      const el = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      if (!el || !seen.has(el)) continue;
+      const text = el.textContent.trim();
+      if (text && text !== seen.get(el)) {
+        seen.set(el, text);
+        showToast(text);
+      }
+    }
+  });
+  for (const el of hints) observer.observe(el, {childList: true, characterData: true, subtree: true});
+}
+
+function closeMemoryMenu() {
+  if (!memoryGroupEl || !memoryMenuToggleEl) return;
+  memoryGroupEl.classList.remove('open');
+  memoryMenuToggleEl.setAttribute('aria-expanded', 'false');
+}
+
+function setupMemoryMenu() {
+  if (!memoryGroupEl || !memoryMenuToggleEl) return;
+  const mobile = window.matchMedia('(max-width:700px)');
+  const sync = () => {
+    memoryMenuToggleEl.hidden = !mobile.matches;
+    if (!mobile.matches) closeMemoryMenu();
+  };
+  sync();
+  mobile.addEventListener('change', sync);
+  memoryMenuToggleEl.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const open = memoryGroupEl.classList.toggle('open');
+    memoryMenuToggleEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  // Choosing an item, tapping elsewhere, or Escape all dismiss the menu.
+  memoryGroupEl.addEventListener('click', (event) => {
+    if (event.target.closest('button')) closeMemoryMenu();
+  });
+  document.addEventListener('click', (event) => {
+    if (!memoryGroupEl.contains(event.target) && event.target !== memoryMenuToggleEl) closeMemoryMenu();
+  });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMemoryMenu(); });
+}
+
 // Unlock audio playback on the first real user interaction (typing counts), so the
 // first spoken reply isn't silently blocked by the browser's autoplay policy.
 document.addEventListener('pointerdown', unlockAudio, {once: true});
 document.addEventListener('keydown', unlockAudio, {once: true});
+setupMemoryMenu();
+watchStatusHints();
 checkHealth();
 setInterval(checkHealth, 5000);

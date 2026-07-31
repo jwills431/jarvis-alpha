@@ -307,6 +307,47 @@ on **loopback** (`http://localhost:8787` in the RDP browser) — the LAN/HTTPS p
   TTS for the first sentence, splitting the first sentence at a comma to shorten the
   first render, or serialising LLM/TTS GPU use.
 
+## Voice latency budget — measured (2026-07-30/31)
+
+Measured end to end rather than guessed, from the moment the push-to-talk button
+is released to the first spoken word:
+
+| stage | cost | notes |
+|---|---|---|
+| upload of the clip | ~0.05 s | 16 kHz mono; a 5 s utterance is ~156 KB. Negligible even over wifi. |
+| speech recognition | ~0.4 s | was ~0.6 s warm / ~0.9 s cold — see resident recognizer below |
+| LLM to first sentence | ~0.5 s | Qwen is not the bottleneck |
+| Fish to first audio | ~1.4 s | for a ~50-char first chunk |
+| **total** | **~2.4 s** | the realistic floor on this hardware |
+
+- **Resident speech recognizer (implemented).** `whisper-cli` was spawned per
+  utterance, reloading the 148 MB model every time: transcription measured ~0.9 s
+  **regardless of clip length** (3 s, 5 s and 11 s audio all ~0.9 s), which is the
+  signature of fixed reload cost rather than compute. New optional
+  `whisper_server_url` (loopback-enforced, empty = old behaviour) posts the clip
+  to a resident `whisper-server` instead; the model stays loaded and no temp file
+  is written. Measured 0.57 s → 0.36 s min on a warm cache (larger gain cold).
+  Started by `start_jarvis.ps1` on :8088. Note: per-request VAD thresholds
+  (the stricter conversation-mode threshold) do not apply on this path; the app's
+  own `validate_speech_energy` gating still does.
+- **Fish time-to-first-audio scales with text length** — 4 chars 0.85 s, 20 chars
+  0.86 s, 58 chars 1.51 s, 128 chars 2.68 s. So there is a fixed ~0.85 s floor plus
+  ~0.014 s per character. Importantly, full generation completes only ~0.2 s after
+  the first audio arrives, i.e. Fish emits per segment rather than progressively —
+  our streaming wins come from chunk pipelining, not intra-sentence streaming.
+- **The first-chunk minimum is already near optimal.** Solving "next chunk must be
+  ready before the current one finishes playing" with the measured constants gives
+  a first chunk of **≥ ~44 characters** when the following chunk is ~90 chars.
+  `SPEECH_FIRST_MIN_CHARS` is 50, just above the threshold — shrinking it would
+  start speech slightly sooner at the cost of reintroducing a gap.
+- **REJECTED (2026-07-31): hybrid Piper-then-Fish first chunk.** Rendering the
+  first chunk with the much faster Piper voice would cut time-to-first-word, but
+  the voice would change mid-reply. Joseph's call: the cloned JARVIS voice must
+  stay consistent — a voice switch "ruins the experience". Do not re-propose.
+  Remaining paths to lower latency are hardware (a GPU with more memory bandwidth
+  would raise Fish's ~60 tok/s roughly in proportion) or a faster TTS model in the
+  same voice — not mixing engines within a reply.
+
 ## STILL TO DO (8)
 
 - **8. End-to-end voice test (NEXT ACTION)** — from another LAN device over

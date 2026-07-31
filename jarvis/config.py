@@ -23,6 +23,11 @@ class Config:
     whisper_vad_threshold: float = 0.5
     whisper_conversation_vad_threshold: float = 0.6
     whisper_vad_min_speech_ms: int = 250
+    # Optional resident whisper.cpp server (whisper-server). Spawning whisper-cli
+    # per utterance reloads the model every time, which measured ~0.9 s regardless
+    # of clip length; a resident server keeps the model loaded and cuts that to
+    # ~0.4-0.6 s. Empty string keeps the original spawn-per-request behaviour.
+    whisper_server_url: str = ""
     transcription_timeout_seconds: int = 45
     max_audio_bytes: int = 1_000_000
     tts_enabled: bool = True
@@ -202,6 +207,14 @@ class Config:
                 raise ValueError("auth_password_salt must be 32-128 lowercase hex characters")
         if self.tts_playback not in ("host", "browser"):
             raise ValueError("tts_playback must be 'host' or 'browser'")
+        if self.whisper_server_url:
+            stt = urlparse(self.whisper_server_url)
+            if stt.scheme != "http" or not stt.hostname:
+                raise ValueError("whisper_server_url must be an HTTP URL")
+            # Audio is the most sensitive payload the app handles; the recognizer
+            # must stay on this machine, like the model and speech backends.
+            if not ipaddress.ip_address(stt.hostname).is_loopback:
+                raise ValueError("whisper_server_url must use a loopback IP address")
         return self
 
 

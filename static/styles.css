@@ -63,4 +63,56 @@ button:last-child { background:#21815f; } button:disabled { opacity:.5; cursor:w
 #speech-settings-form select, #speech-settings-form input { width:100%; border:1px solid #37675a; border-radius:9px; padding:10px; background:#0c1916; color:inherit; font:inherit; }
 #speech-settings-form p { margin:9px 2px 0; color:#78988e; font-size:.78rem; line-height:1.4; }
 #speech-settings-form div { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; margin-top:14px; }
-@media (max-width:700px) { main { padding:20px 12px; } header { align-items:flex-start; gap:12px; } article { max-width:94%; } form div { flex-wrap:wrap; } #voice, #conversation { width:100%; margin-right:0; } }
+/* On desktop the grouped memory buttons lay out inline exactly as before; the
+   wrapper is transparent to layout and its menu toggle stays hidden. */
+#memory-group { display:contents; }
+
+/* Transient status toast. The six hint paragraphs stay in the DOM (they are
+   aria-live regions used by assistive tech); on small screens they are visually
+   hidden and their CHANGES surface here instead, so status never permanently
+   occupies space that belongs to the conversation. */
+#toast { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom,0px) + 96px); transform:translate(-50%,8px);
+  z-index:30; max-width:min(560px,calc(100vw - 24px)); padding:11px 16px; border:1px solid #37675a; border-radius:999px;
+  background:rgba(11,28,24,.96); color:#cfeee2; font-size:.86rem; line-height:1.35; text-align:center;
+  box-shadow:0 10px 30px rgba(0,0,0,.45); opacity:0; pointer-events:none; transition:opacity .22s ease, transform .22s ease; }
+#toast.visible { opacity:1; transform:translate(-50%,0); }
+@media (prefers-reduced-motion:reduce) { #toast { transition:none; } }
+
+@media (max-width:700px) {
+  main { padding:12px 10px; gap:12px; }
+  header { align-items:center; gap:8px; padding-bottom:10px; }
+  h1 { font-size:1.05rem; letter-spacing:.25em; }
+  .tagline { display:none; }               /* reclaim vertical space for the chat */
+  #status { padding:5px 10px; font-size:.75rem; }
+  .header-actions { gap:6px; position:relative; }
+  .header-actions button { padding:7px 11px; font-size:.82rem; }
+  article { max-width:94%; padding:11px 13px; }
+
+  /* Memory controls collapse behind a single button. */
+  #memory-menu-toggle { display:inline-block; }
+  #memory-group { display:none; position:absolute; top:calc(100% + 8px); right:0; z-index:25;
+    flex-direction:column; align-items:stretch; gap:8px; min-width:190px; padding:10px;
+    border:1px solid #37675a; border-radius:12px; background:#0d1d19; box-shadow:0 16px 40px rgba(0,0,0,.5); }
+  #memory-group.open { display:flex; }
+  #memory-group button { width:100%; text-align:left; }
+
+  /* Composer stays compact so the conversation keeps the screen. */
+  form { padding-top:9px; }
+  textarea { height:52px; min-height:52px; max-height:18vh; padding:10px 12px; }
+  #chat-hint, #voice-hint, #conversation-hint, #speech-hint, #auto-memory-hint, #learn-hint {
+    position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
+  }
+  form div { flex-wrap:wrap; gap:6px; margin-top:7px; }
+  /* Two tidy rows: a large push-to-talk paired with Send, then the secondary
+     controls sharing a single row. Keeps the composer near a quarter of the
+     screen instead of a third. */
+  form div button { flex:1 1 auto; min-width:0; padding:8px 9px; font-size:.78rem; }
+  #voice { flex:2 1 60%; margin-right:0; padding:13px 10px; font-size:.92rem; order:1; }
+  #send { flex:1 1 30%; padding:13px 10px; font-size:.92rem; order:2; }
+  #conversation { flex:1 1 auto; order:3; }
+  #speech-toggle { order:4; }
+  #stop-speech { order:5; }
+  #copy-chat { order:6; }
+  #clear { order:7; }
+  #toast { bottom:calc(env(safe-area-inset-bottom,0px) + 12px); }
+}

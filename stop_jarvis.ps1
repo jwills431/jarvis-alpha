@@ -5,7 +5,7 @@
 Write-Host "Stopping JARVIS stack..." -ForegroundColor Cyan
 
 # Process command-line patterns for the three services.
-$patterns = @('jarvis.server', 'llama-server', 'tools.api_server')
+$patterns = @('jarvis.server', 'llama-server', 'whisper-server', 'tools.api_server')
 
 # 1) Ask each to exit gracefully (SIGTERM). This lets the app release the Piper
 #    worker and close sockets cleanly.

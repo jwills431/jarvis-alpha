@@ -169,7 +169,10 @@ class Handler(BaseHTTPRequestHandler):
             return True
         body = json.dumps({"error": "unauthorized"}).encode("utf-8")
         self.send_response(HTTPStatus.UNAUTHORIZED)
-        self.send_header("WWW-Authenticate", 'Basic realm="JARVIS", charset="UTF-8"')
+        # Keep the challenge minimal: WebKit (every browser on iOS) can fail to
+        # present its login prompt when the challenge carries extra parameters,
+        # leaving the user staring at the raw 401 body. realm alone is universal.
+        self.send_header("WWW-Authenticate", 'Basic realm="JARVIS"')
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")

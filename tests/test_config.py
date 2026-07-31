@@ -214,6 +214,14 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Config(tts_playback="speaker").validate()
 
+    def test_whisper_server_url_must_be_loopback_http(self):
+        self.assertEqual(Config().validate().whisper_server_url, "")  # off by default
+        self.assertTrue(Config(whisper_server_url="http://127.0.0.1:8088").validate().whisper_server_url)
+        with self.assertRaises(ValueError):
+            Config(whisper_server_url="http://192.168.1.2:8088").validate()
+        with self.assertRaises(ValueError):
+            Config(whisper_server_url="https://127.0.0.1:8088").validate()
+
     def test_allows_browser_playback(self):
         self.assertEqual(Config(tts_playback="browser").validate().tts_playback, "browser")
 
@@ -1180,6 +1188,45 @@ class TranscriptionTests(unittest.TestCase):
             self.assertEqual(transcribe(Config(), make_wav(amplitude=2000)), "local transcription")
         self.assertIsNotNone(observed_path)
         self.assertFalse(os.path.exists(observed_path))
+
+    def test_resident_recognizer_posts_audio_and_writes_no_temp_file(self):
+        # The resident path must not spawn a process or touch disk: it keeps the
+        # model loaded and sends the clip straight over loopback.
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b"  spoken words from the resident recognizer  "
+
+        def fake_urlopen(request, timeout=None):
+            captured["url"] = request.full_url
+            captured["body"] = request.data
+            captured["content_type"] = request.headers.get("Content-type", "")
+            return FakeResponse()
+
+        audio = make_wav(amplitude=2000)
+        config = Config(whisper_server_url="http://127.0.0.1:8088")
+        with patch("jarvis.transcription.runtime_ready", return_value=True), \
+             patch("jarvis.transcription.urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch("jarvis.transcription.subprocess.run", side_effect=AssertionError("must not spawn whisper-cli")), \
+             patch("jarvis.transcription.tempfile.NamedTemporaryFile", side_effect=AssertionError("must not write audio to disk")):
+            self.assertEqual(transcribe(config, audio), "spoken words from the resident recognizer")
+        self.assertEqual(captured["url"], "http://127.0.0.1:8088/inference")
+        self.assertIn("multipart/form-data", captured["content_type"])
+        self.assertIn(audio, captured["body"])  # the clip is sent verbatim
+
+    def test_resident_recognizer_failure_is_a_process_error(self):
+        config = Config(whisper_server_url="http://127.0.0.1:8088")
+        with patch("jarvis.transcription.runtime_ready", return_value=True), \
+             patch("jarvis.transcription.urllib.request.urlopen", side_effect=OSError("recognizer down")):
+            with self.assertRaises(TranscriptionProcessError):
+                transcribe(config, make_wav(amplitude=2000))
 
     def test_conversation_mode_uses_stricter_vad_threshold(self):
         def fake_run(command, **kwargs):

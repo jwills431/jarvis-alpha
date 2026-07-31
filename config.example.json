@@ -11,6 +11,7 @@
   "whisper_vad_threshold": 0.5,
   "whisper_conversation_vad_threshold": 0.6,
   "whisper_vad_min_speech_ms": 250,
+  "whisper_server_url": "",
   "transcription_timeout_seconds": 45,
   "max_audio_bytes": 1000000,
   "tts_enabled": true,

@@ -7,6 +7,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
+import uuid
 import wave
 from array import array
 from pathlib import Path
@@ -49,6 +52,10 @@ class TranscriptionProcessError(TranscriptionError):
 def runtime_ready(config: Config) -> bool:
     if not config.stt_enabled:
         return False
+    # With a resident recognizer the binary/model live inside that server, so the
+    # local files are not required here.
+    if config.whisper_server_url:
+        return True
     binary = _resolve(config.whisper_binary)
     model = _resolve(config.whisper_model)
     vad_model = _resolve(config.whisper_vad_model)
@@ -58,6 +65,47 @@ def runtime_ready(config: Config) -> bool:
         and model.is_file()
         and (not config.whisper_vad_enabled or vad_model.is_file())
     )
+
+
+def _transcribe_via_server(config: Config, data: bytes) -> str:
+    """Transcribe through a resident whisper-server over loopback HTTP.
+
+    Keeps the model loaded between utterances. Only the captured audio and the
+    returned text cross this boundary, and only on loopback; the audio is never
+    written to disk on this path.
+    """
+    boundary = uuid.uuid4().hex
+    fields = {"temperature": "0.0", "response_format": "text", "language": "en", "no_timestamps": "true"}
+    parts: list[bytes] = []
+    for name, value in fields.items():
+        parts.append(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode("utf-8")
+        )
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+        f"Content-Type: audio/wav\r\n\r\n".encode("utf-8")
+    )
+    parts.append(data)
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    body = b"".join(parts)
+    request = urllib.request.Request(
+        config.whisper_server_url.rstrip("/") + "/inference",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=config.transcription_timeout_seconds) as response:
+            payload = response.read()
+    except TimeoutError as exc:
+        raise TranscriptionTimeout("speech recognition timed out") from exc
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        # A dead or unreachable recognizer is a process failure, not a bad clip.
+        raise TranscriptionProcessError("speech recognition failed") from exc
+    try:
+        return payload.decode("utf-8", errors="replace")
+    except UnicodeDecodeError as exc:  # pragma: no cover - decode uses replace
+        raise TranscriptionProcessError("speech recognition failed") from exc
 
 
 def validate_wav(data: bytes) -> int:
@@ -90,6 +138,10 @@ def transcribe(config: Config, data: bytes, *, conversation_mode: bool = False) 
             CONVERSATION_MIN_PEAK_TO_FLOOR_RATIO if conversation_mode else MIN_PEAK_TO_FLOOR_RATIO
         ),
     )
+    # Resident recognizer: the model stays loaded, so no per-utterance reload and
+    # no temp file. Same validation before, same transcript checks after.
+    if config.whisper_server_url:
+        return validate_transcript(_transcribe_via_server(config, data))
     temp_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(prefix="jarvis-stt-", suffix=".wav", delete=False) as audio_file:
