@@ -135,6 +135,17 @@ promptEl.addEventListener('keydown', (event) => {
   }
 });
 
+// iOS zooms the whole viewport when a focused field's font is under 16px, which
+// made the console render wider than the screen and clip on the right. The
+// stylesheet raises the composer font on small screens so a deliberate tap no
+// longer zooms; this additionally stops the app STEALING focus on touch, where
+// it summoned the keyboard and the zoom without being asked. A pointing device
+// keeps the convenience of a ready input.
+function focusPrompt() {
+  if (window.matchMedia('(pointer: coarse)').matches) return;
+  promptEl.focus();
+}
+
 function addMessage(role, text = '') {
   const el = document.createElement('article');
   el.className = role;
@@ -1702,7 +1713,7 @@ async function submitMessage(value) {
   }
   finally {
     sendEl.disabled = false;
-    promptEl.focus();
+    focusPrompt();
     void checkHealth();
     if (!memoryBackdropEl.hidden) void loadMemories();
     if (autoMemoryQueue.length && !autoMemoryRunning && !autoMemoryTimer) autoMemoryTimer = setTimeout(() => { void flushAutoMemory(); }, 3000);
@@ -1997,7 +2008,7 @@ document.addEventListener('keydown', unlockAudio, {once: true});
     unlockAudio();
     boot.classList.add('dismissed');
     setTimeout(() => boot.remove(), reduced ? 0 : 700);
-    promptEl.focus();
+    focusPrompt();
   };
   start.addEventListener('click', activate, {once: true});
   // Focus the control once it is visible: Enter and Space then activate it, so the
