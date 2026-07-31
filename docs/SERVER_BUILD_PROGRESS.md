@@ -410,8 +410,9 @@ items 3–5.
 
 ## STILL TO DO
 
-- **Run `jarvis_server_tuning.ps1` as admin** to close out lean-checklist items 3–5
-  (Windows Update active hours + no forced reboot; verify Defender exclusions).
+- ~~Run `jarvis_server_tuning.ps1` as admin.~~ ✅ Done 2026-07-31 — the lean
+  checklist is complete. Re-run the script if Windows ever drops the update
+  settings again (it did once already).
 - **BIOS update** (ASUS TUF A620M-PLUS, still on 2613 / 2024-04) for additional AM5
   memory-stability margin. RAM currently 5000 MT/s and stable — see
   `jarvis-server-instability` memory before touching memory settings.

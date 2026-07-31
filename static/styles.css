@@ -1,118 +1,296 @@
-:root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#07110f; color:#d8f7ec; }
-* { box-sizing:border-box; }
-html, body { height:100%; }
-body { margin:0; min-height:100vh; min-height:100dvh; overflow:hidden; background:radial-gradient(circle at top,#15352e,#07110f 60%); }
-main { width:min(900px,100%); height:100vh; height:100dvh; min-height:0; margin:auto; padding:32px 20px; display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:24px; overflow:hidden; }
-header { display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #285047; padding-bottom:18px; }
-h1 { margin:0; letter-spacing:.35em; font-size:1.35rem; } header p { margin:.4rem 0 0; color:#89aa9f; }
-.header-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; }
-#status { padding:7px 12px; border:1px solid #806a31; border-radius:999px; color:#e7ca78; font-size:.85rem; }
-#status.ready { border-color:#2f8b6d; color:#79e7bd; } #status.offline { border-color:#8e4949; color:#ef9c9c; }
-#messages { min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; display:flex; flex-direction:column; gap:14px; padding:8px 4px 8px 0; }
-article { max-width:82%; padding:14px 16px; border-radius:16px; white-space:pre-wrap; line-height:1.5; }
-article.assistant { align-self:flex-start; background:#12241f; border:1px solid #24483e; }
-article.user { align-self:flex-end; background:#174b3d; }
-form { border-top:1px solid #285047; padding-top:18px; } label { position:absolute; left:-9999px; }
-textarea { width:100%; max-height:min(30vh,220px); resize:vertical; border:1px solid #37675a; border-radius:12px; padding:13px; background:#0c1916; color:inherit; font:inherit; }
-#chat-hint, #voice-hint, #conversation-hint, #speech-hint, #auto-memory-hint, #learn-hint { margin:7px 2px 0; color:#78988e; font-size:.8rem; }
-#voice-hint { color:#8fb9aa; }
-#conversation-hint { color:#d4ad75; }
-#speech-hint { color:#9eb8d8; }
-#auto-memory-hint { color:#79e7bd; }
-#learn-hint { color:#a8cbbf; }
-form div { display:flex; justify-content:flex-end; gap:10px; margin-top:10px; }
-button { border:1px solid #39715f; border-radius:9px; background:#16352d; color:inherit; padding:9px 18px; font:inherit; cursor:pointer; }
-#voice { margin-right:auto; }
-#voice.listening { border-color:#e36c6c; background:#702c2c; color:#fff; }
-#voice.transcribing { border-color:#b08b38; color:#f2d482; }
-#conversation.active { border-color:#e0a64e; background:#62451d; color:#fff0d2; box-shadow:0 0 0 2px rgba(224,166,78,.2); }
-#conversation.hearing { border-color:#e36c6c; background:#702c2c; color:#fff; }
-#learn-toggle.active { border-color:#79e7bd; background:#1f5b49; color:#e6fff6; box-shadow:0 0 0 2px rgba(121,231,189,.18); }
-#auto-memory-toggle.active { border-color:#79e7bd; background:#1f5b49; color:#e6fff6; box-shadow:0 0 0 2px rgba(121,231,189,.18); }
-button:last-child { background:#21815f; } button:disabled { opacity:.5; cursor:wait; }
-[hidden] { display:none !important; }
-#memory-backdrop, #speech-settings-backdrop { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:20px; background:rgba(2,8,7,.78); backdrop-filter:blur(3px); }
-#memory-panel, #speech-settings-panel { width:min(720px,100%); max-height:min(820px,calc(100dvh - 40px)); overflow-y:auto; border:1px solid #37675a; border-radius:18px; padding:22px; background:#0b1815; box-shadow:0 24px 80px rgba(0,0,0,.5); }
-#speech-settings-panel { width:min(560px,100%); }
-#memory-panel header, #speech-settings-panel header { align-items:flex-start; padding-bottom:14px; }
-#memory-panel h2, #speech-settings-panel h2 { margin:0; letter-spacing:.08em; font-size:1.15rem; }
-#memory-status { color:#8fb9aa; min-height:1.3em; }
-#memory-form { border:1px solid #24483e; border-radius:12px; padding:14px; background:#0d1d19; }
-#memory-form .visible-label { position:static; display:block; margin:8px 0 5px; color:#a8cbbf; font-size:.85rem; }
-#memory-form select { width:100%; border:1px solid #37675a; border-radius:9px; padding:10px; background:#0c1916; color:inherit; font:inherit; }
-#memory-form textarea { max-height:160px; resize:vertical; }
-#memory-form p { margin:7px 2px 0; color:#78988e; font-size:.78rem; }
-#memory-form div { display:flex; justify-content:flex-end; gap:10px; margin-top:10px; }
-#memory-panel h3 { margin:18px 0 8px; font-size:.92rem; letter-spacing:.06em; color:#a8cbbf; }
-.memory-help { margin:0 0 10px; color:#d4ad75; font-size:.8rem; line-height:1.4; }
-#memory-list, #memory-candidates { display:flex; flex-direction:column; gap:10px; }
-.memory-empty { color:#78988e; text-align:center; padding:18px; }
-.memory-item { border:1px solid #24483e; border-radius:12px; padding:12px 14px; background:#10221d; }
-.memory-item.candidate { border-color:#806a31; background:#251f11; }
-.memory-item p { margin:7px 0 10px; white-space:pre-wrap; line-height:1.45; }
-.memory-item .memory-meta { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#79e7bd; font-size:.76rem; text-transform:uppercase; letter-spacing:.08em; }
-.memory-item .memory-actions { display:flex; justify-content:flex-end; gap:8px; }
-.memory-item button { padding:6px 12px; font-size:.82rem; }
-.memory-item button[data-action="delete"] { border-color:#7f4949; background:#3a2020; }
-#chat #memory-notice { width:100%; display:flex; align-items:center; justify-content:flex-start; gap:12px; margin-top:10px; padding:10px 12px; border:1px solid #79e7bd; border-radius:10px; background:#102b23; }
-#memory-notice span { flex:1; line-height:1.4; }
-#memory-notice button { flex:none; padding:6px 12px; }
-#speech-settings-status { color:#8fb9aa; min-height:1.3em; }
-#speech-settings-form { border:1px solid #24483e; border-radius:12px; padding:14px; background:#0d1d19; }
-#speech-settings-form .visible-label { position:static; display:block; margin:8px 0 5px; color:#a8cbbf; font-size:.85rem; }
-#speech-settings-form select, #speech-settings-form input { width:100%; border:1px solid #37675a; border-radius:9px; padding:10px; background:#0c1916; color:inherit; font:inherit; }
-#speech-settings-form p { margin:9px 2px 0; color:#78988e; font-size:.78rem; line-height:1.4; }
-#speech-settings-form div { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; margin-top:14px; }
-/* On desktop the grouped memory buttons lay out inline exactly as before; the
-   wrapper is transparent to layout and its menu toggle stays hidden. */
-#memory-group { display:contents; }
+/* ==========================================================================
+   JARVIS — holographic HUD theme
+   Restyle only: every selector maps to markup and state classes the app
+   already sets, so behaviour (voice states, panels, menus) is untouched.
+   ========================================================================== */
+:root{
+  --void:#04080c; --panel:rgba(10,26,36,.72); --panel-solid:#08161f;
+  --cyan:#4dd8ff; --cyan-dim:#1c6f8c; --cyan-faint:rgba(77,216,255,.14);
+  --ice:#bff0ff; --text:#cfe9f5; --muted:#6f97a8;
+  --amber:#ffb347; --good:#7ff0c4; --bad:#ff8f8f;
+  --line:rgba(77,216,255,.22);
+  --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--void); color:var(--text);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;min-height:100vh;min-height:100dvh;overflow:hidden;
+  background:
+    radial-gradient(ellipse at 50% -10%,rgba(77,216,255,.10),transparent 55%),
+    repeating-linear-gradient(0deg,transparent 0 3px,rgba(77,216,255,.018) 3px 4px),
+    var(--void);
+}
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:60;
+  background:linear-gradient(180deg,transparent,rgba(77,216,255,.05),transparent);
+  height:38%;animation:sweep 7s linear infinite;
+}
+@keyframes sweep{0%{transform:translateY(-100%)}100%{transform:translateY(320%)}}
 
-/* Transient status toast. The six hint paragraphs stay in the DOM (they are
-   aria-live regions used by assistive tech); on small screens they are visually
-   hidden and their CHANGES surface here instead, so status never permanently
-   occupies space that belongs to the conversation. */
-#toast { position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom,0px) + 96px); transform:translate(-50%,8px);
-  z-index:30; max-width:min(560px,calc(100vw - 24px)); padding:11px 16px; border:1px solid #37675a; border-radius:999px;
-  background:rgba(11,28,24,.96); color:#cfeee2; font-size:.86rem; line-height:1.35; text-align:center;
-  box-shadow:0 10px 30px rgba(0,0,0,.45); opacity:0; pointer-events:none; transition:opacity .22s ease, transform .22s ease; }
-#toast.visible { opacity:1; transform:translate(-50%,0); }
-@media (prefers-reduced-motion:reduce) { #toast { transition:none; } }
+main{
+  width:min(980px,100%);height:100vh;height:100dvh;min-height:0;margin:auto;
+  padding:22px 20px 18px;display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+  gap:14px;overflow:hidden;position:relative;
+}
+main::before,main::after{
+  content:"";position:absolute;width:26px;height:26px;pointer-events:none;
+  border-color:var(--cyan);opacity:.5;
+}
+main::before{top:6px;left:6px;border-top:2px solid;border-left:2px solid}
+main::after{bottom:6px;right:6px;border-bottom:2px solid;border-right:2px solid}
 
-@media (max-width:700px) {
-  main { padding:12px 10px; gap:12px; }
-  header { align-items:center; gap:8px; padding-bottom:10px; }
-  h1 { font-size:1.05rem; letter-spacing:.25em; }
-  .tagline { display:none; }               /* reclaim vertical space for the chat */
-  #status { padding:5px 10px; font-size:.75rem; }
-  .header-actions { gap:6px; position:relative; }
-  .header-actions button { padding:7px 11px; font-size:.82rem; }
-  article { max-width:94%; padding:11px 13px; }
+/* ---------- header ---------- */
+header{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding-bottom:11px;border-bottom:1px solid var(--line);position:relative;
+}
+header::after{content:"";position:absolute;left:0;bottom:-1px;width:130px;height:1px;
+  background:var(--cyan);box-shadow:0 0 9px var(--cyan)}
+h1{margin:0;font-size:1.15rem;letter-spacing:.6em;font-weight:500;color:var(--ice);
+  text-shadow:0 0 16px rgba(77,216,255,.55)}
+header p{margin:.35rem 0 0;font-family:var(--mono);font-size:.6rem;letter-spacing:.22em;
+  color:var(--muted);text-transform:uppercase}
+.header-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px}
 
-  /* Memory controls collapse behind a single button. */
-  #memory-menu-toggle { display:inline-block; }
-  #memory-group { display:none; position:absolute; top:calc(100% + 8px); right:0; z-index:25;
-    flex-direction:column; align-items:stretch; gap:8px; min-width:190px; padding:10px;
-    border:1px solid #37675a; border-radius:12px; background:#0d1d19; box-shadow:0 16px 40px rgba(0,0,0,.5); }
-  #memory-group.open { display:flex; }
-  #memory-group button { width:100%; text-align:left; }
+#status{
+  font-family:var(--mono);font-size:.63rem;letter-spacing:.16em;text-transform:uppercase;white-space:nowrap;
+  padding:6px 12px;color:var(--amber);border:1px solid rgba(255,179,71,.4);
+  background:rgba(255,179,71,.07);border-radius:0;
+  clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px);
+}
+#status.ready{color:var(--good);border-color:rgba(127,240,196,.42);background:rgba(127,240,196,.07)}
+#status.offline{color:var(--bad);border-color:rgba(255,143,143,.42);background:rgba(255,143,143,.07)}
 
-  /* Composer stays compact so the conversation keeps the screen. */
-  form { padding-top:9px; }
-  textarea { height:52px; min-height:52px; max-height:18vh; padding:10px 12px; }
-  #chat-hint, #voice-hint, #conversation-hint, #speech-hint, #auto-memory-hint, #learn-hint {
-    position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
-  }
-  form div { flex-wrap:wrap; gap:6px; margin-top:7px; }
-  /* Two tidy rows: a large push-to-talk paired with Send, then the secondary
-     controls sharing a single row. Keeps the composer near a quarter of the
-     screen instead of a third. */
-  form div button { flex:1 1 auto; min-width:0; padding:8px 9px; font-size:.78rem; }
-  #voice { flex:2 1 60%; margin-right:0; padding:13px 10px; font-size:.92rem; order:1; }
-  #send { flex:1 1 30%; padding:13px 10px; font-size:.92rem; order:2; }
-  #conversation { flex:1 1 auto; order:3; }
-  #speech-toggle { order:4; }
-  #stop-speech { order:5; }
-  #copy-chat { order:6; }
-  #clear { order:7; }
-  #toast { bottom:calc(env(safe-area-inset-bottom,0px) + 12px); }
+/* ---------- conversation ---------- */
+#messages{
+  min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;
+  display:flex;flex-direction:column;gap:13px;padding:6px 4px 6px 0;
+}
+#messages::-webkit-scrollbar{width:5px}
+#messages::-webkit-scrollbar-thumb{background:var(--cyan-dim)}
+article{
+  max-width:80%;padding:12px 15px;line-height:1.55;white-space:pre-wrap;font-size:.95rem;
+  border-radius:0;
+  clip-path:polygon(11px 0,100% 0,100% calc(100% - 11px),calc(100% - 11px) 100%,0 100%,0 11px);
+}
+/* Speaker tags are generated, so app.js keeps writing plain text nodes. */
+article::before{
+  display:block;font-family:var(--mono);font-size:.57rem;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:6px;
+}
+article.assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--line);
+  border-left:2px solid var(--cyan)}
+article.assistant::before{content:"JARVIS";color:var(--cyan)}
+article.user{align-self:flex-end;background:rgba(77,216,255,.10);border:1px solid rgba(77,216,255,.3)}
+article.user::before{content:"You"}
+
+/* ---------- composer ---------- */
+form{border-top:1px solid var(--line);padding-top:13px}
+label{position:absolute;left:-9999px}
+textarea{
+  width:100%;max-height:min(30vh,220px);resize:vertical;background:rgba(4,14,20,.85);
+  color:var(--text);border:1px solid var(--line);padding:11px 13px;font:inherit;font-size:.92rem;
+  border-radius:0;
+  clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px);
+}
+textarea:focus{outline:none;border-color:var(--cyan);
+  box-shadow:0 0 0 1px var(--cyan-faint),0 0 18px rgba(77,216,255,.16)}
+textarea::placeholder{color:var(--muted)}
+
+#chat-hint,#voice-hint,#conversation-hint,#speech-hint,#auto-memory-hint,#learn-hint{
+  margin:7px 2px 0;font-family:var(--mono);font-size:.63rem;letter-spacing:.05em;color:var(--muted);
+}
+#voice-hint{color:#8fbccd} #conversation-hint{color:var(--amber)}
+#speech-hint{color:#8fb6d8} #auto-memory-hint{color:var(--good)} #learn-hint{color:#a8cbbf}
+
+form div{display:flex;justify-content:flex-end;gap:8px;margin-top:10px;align-items:center}
+button{
+  font-family:var(--mono);font-size:.64rem;letter-spacing:.15em;text-transform:uppercase;
+  padding:9px 15px;background:transparent;color:var(--muted);border:1px solid var(--line);
+  cursor:pointer;border-radius:0;
+  clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px);
+  transition:color .15s,border-color .15s,background .15s;
+}
+button:hover:not(:disabled){border-color:var(--cyan);color:var(--ice);background:rgba(77,216,255,.07)}
+button:disabled{opacity:.38;cursor:not-allowed}
+button:last-child{color:var(--ice);border-color:rgba(77,216,255,.55);background:rgba(77,216,255,.13)}
+
+/* ---------- the arc reactor (push to talk) ----------
+   #voice keeps its text node (app.js rewrites it), so the reactor is drawn
+   entirely with pseudo-elements: ::before is the glowing core plus concentric
+   rings via box-shadow, ::after is the ripple shown while listening. */
+#voice{
+  margin-right:auto;position:relative;width:132px;height:118px;padding:74px 0 0;
+  border:0;background:none;color:var(--muted);font-size:.58rem;letter-spacing:.16em;
+  clip-path:none;text-align:center;overflow:visible;
+}
+#voice::before{
+  content:"";position:absolute;top:14px;left:50%;width:40px;height:40px;margin-left:-20px;
+  border-radius:50%;
+  background:radial-gradient(circle,#eafcff 0%,var(--cyan) 42%,var(--cyan-dim) 100%);
+  box-shadow:
+    0 0 0 9px rgba(77,216,255,.09),
+    0 0 0 10px rgba(77,216,255,.30),
+    0 0 0 20px rgba(77,216,255,.07),
+    0 0 0 21px rgba(77,216,255,.16),
+    0 0 22px rgba(77,216,255,.7), 0 0 46px rgba(77,216,255,.32);
+  animation:breathe 3.6s ease-in-out infinite;
+}
+@keyframes breathe{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.07);opacity:1}}
+#voice:hover:not(:disabled){background:none;color:var(--ice)}
+#voice:disabled{opacity:.45}
+#voice.listening{color:var(--bad)}
+#voice.listening::before{
+  background:radial-gradient(circle,#fff 0%,#ff9a9a 40%,#a33 100%);
+  box-shadow:
+    0 0 0 9px rgba(255,143,143,.10),0 0 0 10px rgba(255,143,143,.34),
+    0 0 0 20px rgba(255,143,143,.08),0 0 0 21px rgba(255,143,143,.18),
+    0 0 26px rgba(255,120,120,.8),0 0 54px rgba(255,90,90,.4);
+  animation:breathe 1s ease-in-out infinite;
+}
+#voice.listening::after,body.jarvis-speaking #voice::after{
+  content:"";position:absolute;top:4px;left:50%;width:60px;height:60px;margin-left:-30px;
+  border-radius:50%;border:1px solid var(--cyan);animation:ripple 1.5s ease-out infinite;
+}
+#voice.listening::after{border-color:var(--bad)}
+@keyframes ripple{0%{transform:scale(.5);opacity:.85}100%{transform:scale(1.6);opacity:0}}
+#voice.transcribing{color:var(--amber)}
+#voice.transcribing::before{
+  background:radial-gradient(circle,#fff5e0 0%,var(--amber) 45%,#8a5410 100%);
+  box-shadow:0 0 0 10px rgba(255,179,71,.22),0 0 24px rgba(255,179,71,.6);
+  animation:breathe 1.4s ease-in-out infinite;
+}
+/* while JARVIS speaks, the core pulses cyan (class synced from speechActive) */
+body.jarvis-speaking #voice::before{animation:breathe 1.5s ease-in-out infinite}
+
+#conversation.active{border-color:var(--amber);background:rgba(255,179,71,.14);color:#ffe2b8}
+#conversation.hearing{border-color:var(--bad);background:rgba(255,143,143,.16);color:#ffd7d7}
+#learn-toggle.active,#auto-memory-toggle.active{
+  border-color:var(--good);background:rgba(127,240,196,.13);color:#dffff2}
+
+[hidden]{display:none!important}
+
+/* ---------- boot sequence ---------- */
+#boot{
+  position:fixed;inset:0;z-index:100;background:var(--void);display:grid;place-items:center;
+  font-family:var(--mono);color:var(--cyan);animation:bootout .7s ease 2.4s forwards;
+}
+#boot div{font-size:.7rem;letter-spacing:.16em;line-height:2;opacity:0;
+  animation:typein .3s ease forwards}
+#boot div:nth-child(1){animation-delay:.15s} #boot div:nth-child(2){animation-delay:.55s}
+#boot div:nth-child(3){animation-delay:.95s} #boot div:nth-child(4){animation-delay:1.35s}
+#boot div:nth-child(5){animation-delay:1.75s;color:var(--ice)}
+@keyframes typein{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
+@keyframes bootout{to{opacity:0;visibility:hidden}}
+
+/* ---------- dialogs ---------- */
+#memory-backdrop,#speech-settings-backdrop{
+  position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:20px;
+  background:rgba(2,8,12,.84);backdrop-filter:blur(3px);
+}
+#memory-panel,#speech-settings-panel{
+  width:min(720px,100%);max-height:min(820px,calc(100dvh - 40px));overflow-y:auto;
+  border:1px solid var(--line);padding:22px;background:var(--panel-solid);border-radius:0;
+  box-shadow:0 24px 80px rgba(0,0,0,.6),0 0 40px rgba(77,216,255,.07);
+  clip-path:polygon(16px 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%,0 16px);
+}
+#speech-settings-panel{width:min(560px,100%)}
+#memory-panel header,#speech-settings-panel header{align-items:flex-start;padding-bottom:14px}
+#memory-panel h2,#speech-settings-panel h2{margin:0;font-size:1rem;letter-spacing:.22em;
+  text-transform:uppercase;font-weight:500;color:var(--ice)}
+#memory-panel header p,#speech-settings-panel header p{margin:.4rem 0 0;font-family:var(--mono);
+  font-size:.62rem;letter-spacing:.08em;color:var(--muted);text-transform:none}
+#memory-status,#speech-settings-status{font-family:var(--mono);font-size:.66rem;color:#8fbccd;min-height:1.3em}
+#memory-form,#speech-settings-form{border:1px solid var(--line);padding:14px;background:rgba(4,14,20,.7)}
+#memory-form .visible-label,#speech-settings-form .visible-label{
+  position:static;display:block;margin:9px 0 5px;font-family:var(--mono);font-size:.63rem;
+  letter-spacing:.12em;text-transform:uppercase;color:#9fc4d4}
+#memory-form select,#speech-settings-form select,#speech-settings-form input{
+  width:100%;border:1px solid var(--line);padding:10px;background:rgba(4,14,20,.9);
+  color:inherit;font:inherit;border-radius:0}
+#speech-settings-form input[type=range]{padding:0;accent-color:var(--cyan)}
+#speech-settings-form input[type=checkbox]{width:auto;margin-right:7px;accent-color:var(--cyan)}
+#memory-form textarea{max-height:160px;resize:vertical}
+#memory-form p,#speech-settings-form p{margin:8px 2px 0;font-family:var(--mono);
+  font-size:.6rem;line-height:1.6;color:var(--muted)}
+#memory-form div,#speech-settings-form div{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:9px;margin-top:12px}
+#fish-tuning{border:1px solid var(--line);padding:12px;margin-top:12px;background:rgba(77,216,255,.03)}
+#fish-tuning legend{font-family:var(--mono);font-size:.62rem;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--cyan);padding:0 8px}
+.tuning-value{float:right;font-family:var(--mono);color:var(--ice)}
+#memory-panel h3{margin:18px 0 8px;font-family:var(--mono);font-size:.66rem;letter-spacing:.18em;
+  text-transform:uppercase;color:#9fc4d4}
+.memory-help{margin:0 0 10px;font-family:var(--mono);font-size:.62rem;line-height:1.5;color:var(--amber)}
+#memory-list,#memory-candidates{display:flex;flex-direction:column;gap:10px}
+.memory-empty{color:var(--muted);text-align:center;padding:18px;font-family:var(--mono);font-size:.68rem}
+.memory-item{border:1px solid var(--line);padding:12px 14px;background:rgba(10,26,36,.6);
+  clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px)}
+.memory-item.candidate{border-color:rgba(255,179,71,.4);background:rgba(255,179,71,.06)}
+.memory-item p{margin:7px 0 10px;white-space:pre-wrap;line-height:1.45}
+.memory-item .memory-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  font-family:var(--mono);color:var(--cyan);font-size:.6rem;text-transform:uppercase;letter-spacing:.14em}
+.memory-item .memory-actions{display:flex;justify-content:flex-end;gap:8px}
+.memory-item button{padding:6px 11px;font-size:.58rem}
+.memory-item button[data-action="delete"]{border-color:rgba(255,143,143,.42);color:var(--bad)}
+#chat #memory-notice{
+  width:100%;display:flex;align-items:center;gap:12px;margin-top:10px;padding:10px 12px;
+  border:1px solid rgba(127,240,196,.45);background:rgba(127,240,196,.08);
+  clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px)}
+#memory-notice span{flex:1;line-height:1.4;font-size:.85rem}
+#memory-notice button{flex:none;padding:6px 12px}
+
+/* ---------- transient status toast ---------- */
+#memory-group{display:contents}
+#toast{
+  position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 96px);
+  transform:translate(-50%,8px);z-index:30;max-width:min(560px,calc(100vw - 24px));
+  padding:10px 16px;border:1px solid var(--line);background:rgba(7,20,28,.96);
+  color:var(--ice);font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;
+  line-height:1.4;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.5);
+  opacity:0;pointer-events:none;transition:opacity .22s ease,transform .22s ease;
+  clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px);
+}
+#toast.visible{opacity:1;transform:translate(-50%,0)}
+
+@media (max-width:700px){
+  main{padding:13px 10px 11px;gap:10px}
+  main::before,main::after{width:18px;height:18px}
+  header{align-items:center;gap:8px;padding-bottom:9px}
+  h1{font-size:.92rem;letter-spacing:.34em}
+  .tagline{display:none}
+  #status{padding:5px 9px;font-size:.56rem}
+  .header-actions{gap:6px;position:relative}
+  .header-actions button{padding:7px 10px;font-size:.58rem}
+  article{max-width:93%;padding:11px 13px}
+
+  #memory-menu-toggle{display:inline-block}
+  #memory-group{display:none;position:absolute;top:calc(100% + 8px);right:0;z-index:25;
+    flex-direction:column;align-items:stretch;gap:7px;min-width:190px;padding:10px;
+    border:1px solid var(--line);background:var(--panel-solid);
+    box-shadow:0 16px 40px rgba(0,0,0,.55)}
+  #memory-group.open{display:flex}
+  #memory-group button{width:100%;text-align:left}
+
+  form{padding-top:9px}
+  textarea{height:50px;min-height:50px;max-height:18vh;padding:10px 12px}
+  #chat-hint,#voice-hint,#conversation-hint,#speech-hint,#auto-memory-hint,#learn-hint{
+    position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  form div{flex-wrap:wrap;gap:6px;margin-top:7px}
+  form div button{flex:1 1 auto;min-width:0;padding:8px 9px;font-size:.56rem}
+  /* reactor centred above a compact control row */
+  #voice{flex:1 1 100%;order:1;margin:0 auto 6px;width:112px;height:104px;padding:66px 0 0}
+  #voice::before{width:34px;height:34px;margin-left:-17px;top:12px}
+  #send{flex:1 1 40%;order:2;padding:11px 10px;font-size:.68rem}
+  #conversation{flex:1 1 45%;order:3}
+  #speech-toggle{order:4} #stop-speech{order:5} #copy-chat{order:6} #clear{order:7}
+  #toast{bottom:calc(env(safe-area-inset-bottom,0px) + 12px)}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  #boot{display:none}
+  body::after{display:none}
 }

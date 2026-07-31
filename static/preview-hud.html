@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JARVIS — HUD theme preview</title>
+<style>
+/* ============================================================
+   JARVIS holographic HUD — THEME PROTOTYPE (not wired to the app)
+   Static mockup for evaluating the look before restyling the real UI.
+   Buttons below cycle the voice-orb states so each can be judged.
+   ============================================================ */
+:root{
+  --void:#04080c; --void-2:#071119; --panel:rgba(10,26,36,.72);
+  --cyan:#4dd8ff; --cyan-dim:#1c6f8c; --cyan-faint:rgba(77,216,255,.14);
+  --ice:#bff0ff; --text:#cfe9f5; --muted:#6f97a8; --amber:#ffb347;
+  --line:rgba(77,216,255,.22);
+  --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;font-family:var(--sans);color:var(--text);
+  background:
+    radial-gradient(ellipse at 50% -10%,rgba(77,216,255,.10),transparent 55%),
+    repeating-linear-gradient(0deg,transparent 0 3px,rgba(77,216,255,.018) 3px 4px),
+    var(--void);
+  overflow:hidden;
+}
+/* Faint sweeping scanline over everything */
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:60;
+  background:linear-gradient(180deg,transparent,rgba(77,216,255,.055),transparent);
+  height:38%;animation:sweep 7s linear infinite;
+}
+@keyframes sweep{0%{transform:translateY(-100%)}100%{transform:translateY(320%)}}
+
+main{
+  width:min(980px,100%);height:100vh;height:100dvh;margin:auto;padding:22px 20px 18px;
+  display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:14px;position:relative;
+}
+/* Corner brackets framing the whole console */
+main::before,main::after{
+  content:"";position:absolute;width:26px;height:26px;pointer-events:none;
+  border-color:var(--cyan);opacity:.55;
+}
+main::before{top:8px;left:8px;border-top:2px solid;border-left:2px solid}
+main::after{bottom:8px;right:8px;border-bottom:2px solid;border-right:2px solid}
+
+/* ---------- header ---------- */
+header{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding-bottom:11px;border-bottom:1px solid var(--line);position:relative;
+}
+header::after{content:"";position:absolute;left:0;bottom:-1px;width:130px;height:1px;background:var(--cyan);box-shadow:0 0 9px var(--cyan)}
+.brand{display:flex;align-items:baseline;gap:12px}
+h1{margin:0;font-size:1.15rem;letter-spacing:.62em;font-weight:500;color:var(--ice);text-shadow:0 0 16px rgba(77,216,255,.55)}
+.sub{font-family:var(--mono);font-size:.62rem;letter-spacing:.24em;color:var(--muted);text-transform:uppercase}
+.hud-actions{display:flex;align-items:center;gap:8px}
+.chip{
+  font-family:var(--mono);font-size:.63rem;letter-spacing:.16em;text-transform:uppercase;
+  padding:6px 11px;border:1px solid var(--line);color:var(--muted);background:rgba(77,216,255,.05);
+  clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px);
+  cursor:pointer;
+}
+.chip:hover{border-color:var(--cyan);color:var(--ice)}
+.status{
+  font-family:var(--mono);font-size:.63rem;letter-spacing:.16em;text-transform:uppercase;
+  padding:6px 12px;color:#7ff0c4;border:1px solid rgba(127,240,196,.4);background:rgba(127,240,196,.07);
+  display:flex;align-items:center;gap:7px;
+  clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px);
+}
+.status i{width:6px;height:6px;border-radius:50%;background:#7ff0c4;box-shadow:0 0 8px #7ff0c4;animation:blink 2.4s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ---------- conversation ---------- */
+#log{min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:13px;padding:6px 4px 6px 0}
+#log::-webkit-scrollbar{width:5px}
+#log::-webkit-scrollbar-thumb{background:var(--cyan-dim)}
+.msg{max-width:80%;padding:12px 15px;line-height:1.55;position:relative;font-size:.95rem;
+  clip-path:polygon(11px 0,100% 0,100% calc(100% - 11px),calc(100% - 11px) 100%,0 100%,0 11px);}
+.msg .tag{display:block;font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.from-j{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-left:2px solid var(--cyan)}
+.from-j .tag{color:var(--cyan)}
+.from-u{align-self:flex-end;background:rgba(77,216,255,.10);border:1px solid rgba(77,216,255,.3)}
+
+/* ---------- composer + arc reactor ---------- */
+footer{border-top:1px solid var(--line);padding-top:13px;display:flex;gap:18px;align-items:flex-end}
+.field{flex:1;display:flex;flex-direction:column;gap:9px}
+textarea{
+  width:100%;height:56px;resize:none;background:rgba(4,14,20,.85);color:var(--text);
+  border:1px solid var(--line);padding:11px 13px;font:inherit;font-size:.92rem;
+  clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px);
+}
+textarea:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan-faint),0 0 18px rgba(77,216,255,.16)}
+textarea::placeholder{color:var(--muted)}
+.row{display:flex;gap:7px;flex-wrap:wrap}
+.btn{
+  font-family:var(--mono);font-size:.64rem;letter-spacing:.15em;text-transform:uppercase;
+  padding:8px 13px;background:transparent;color:var(--muted);border:1px solid var(--line);cursor:pointer;
+  clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px);
+}
+.btn:hover{border-color:var(--cyan);color:var(--ice);background:rgba(77,216,255,.07)}
+.btn.send{color:var(--ice);border-color:rgba(77,216,255,.55);background:rgba(77,216,255,.13)}
+
+/* the arc reactor */
+.reactor{position:relative;width:112px;height:112px;flex:none;display:grid;place-items:center;background:none;border:0;cursor:pointer;padding:0}
+.reactor .ring{position:absolute;border-radius:50%;border:1px solid var(--cyan-dim)}
+.r1{inset:0;border-width:1px}
+.r2{inset:11px;border-color:rgba(77,216,255,.4)}
+.r3{inset:24px;border-color:rgba(77,216,255,.6)}
+.core{
+  width:44px;height:44px;border-radius:50%;
+  background:radial-gradient(circle,#eafcff 0%,var(--cyan) 42%,var(--cyan-dim) 100%);
+  box-shadow:0 0 22px rgba(77,216,255,.75),0 0 46px rgba(77,216,255,.35);
+  animation:breathe 3.6s ease-in-out infinite;
+}
+@keyframes breathe{0%,100%{transform:scale(1);opacity:.88}50%{transform:scale(1.07);opacity:1}}
+/* rotating tick ring */
+.ticks{position:absolute;inset:-4px;border-radius:50%;animation:spin 14s linear infinite}
+.ticks span{position:absolute;left:50%;top:0;width:1px;height:7px;background:var(--cyan-dim);transform-origin:50% 60px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.reactor .label{position:absolute;bottom:-19px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  font-family:var(--mono);font-size:.56rem;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+
+/* listening: faster pulse + expanding rings */
+.reactor.listening .core{animation:breathe 1s ease-in-out infinite;background:radial-gradient(circle,#fff 0%,#ff9a9a 40%,#a33 100%);box-shadow:0 0 26px rgba(255,120,120,.8),0 0 54px rgba(255,90,90,.4)}
+.reactor.listening .r2,.reactor.listening .r3{border-color:rgba(255,140,140,.6)}
+.reactor.listening .label{color:#ff9a9a}
+.reactor.listening::after,.reactor.speaking::after{
+  content:"";position:absolute;inset:0;border-radius:50%;border:1px solid var(--cyan);
+  animation:ripple 1.5s ease-out infinite;
+}
+.reactor.listening::after{border-color:#ff9a9a}
+@keyframes ripple{0%{transform:scale(.55);opacity:.85}100%{transform:scale(1.5);opacity:0}}
+/* speaking: waveform ring */
+.reactor.speaking .core{animation:breathe 1.6s ease-in-out infinite}
+.reactor.speaking .label{color:var(--cyan)}
+.wave{position:absolute;inset:0;display:none;place-items:center;gap:3px}
+.reactor.speaking .wave{display:flex;align-items:center;justify-content:center}
+.wave b{display:block;width:2px;height:9px;background:var(--cyan);box-shadow:0 0 7px var(--cyan);animation:bar .85s ease-in-out infinite}
+.wave b:nth-child(2){animation-delay:.1s}.wave b:nth-child(3){animation-delay:.2s}
+.wave b:nth-child(4){animation-delay:.3s}.wave b:nth-child(5){animation-delay:.4s}
+@keyframes bar{0%,100%{height:7px;opacity:.6}50%{height:26px;opacity:1}}
+
+/* transient status toast */
+#toast{
+  position:fixed;left:50%;transform:translate(-50%,6px);bottom:22px;z-index:50;
+  font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;text-transform:uppercase;
+  padding:9px 16px;color:var(--ice);border:1px solid var(--line);background:rgba(7,20,28,.95);
+  clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px);
+  opacity:0;transition:opacity .25s,transform .25s;
+}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+
+/* boot sequence */
+#boot{position:fixed;inset:0;z-index:100;background:var(--void);display:grid;place-items:center;
+  font-family:var(--mono);color:var(--cyan);animation:bootout .7s ease 2.5s forwards}
+#boot .lines{font-size:.7rem;letter-spacing:.16em;line-height:2;text-align:left;opacity:.9}
+#boot .lines div{opacity:0;animation:typein .3s ease forwards}
+#boot .lines div:nth-child(1){animation-delay:.15s}
+#boot .lines div:nth-child(2){animation-delay:.6s}
+#boot .lines div:nth-child(3){animation-delay:1.05s}
+#boot .lines div:nth-child(4){animation-delay:1.5s}
+#boot .lines div:nth-child(5){animation-delay:1.95s;color:var(--ice)}
+@keyframes typein{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
+@keyframes bootout{to{opacity:0;visibility:hidden}}
+
+@media (max-width:700px){
+  main{padding:14px 11px 12px;gap:10px}
+  h1{font-size:.95rem;letter-spacing:.4em}
+  .sub{display:none}
+  .msg{max-width:92%}
+  footer{flex-direction:column-reverse;align-items:stretch;gap:10px}
+  .reactor{width:84px;height:84px;margin:0 auto 13px}
+  .reactor .core{width:34px;height:34px}
+  .r2{inset:9px}.r3{inset:19px}
+  .ticks span{transform-origin:50% 46px;height:5px}
+  .btn{padding:7px 10px;font-size:.6rem}
+  textarea{height:48px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  #boot{display:none}
+}
+</style>
+</head>
+<body>
+
+<div id="boot"><div class="lines">
+  <div>&gt; INITIALIZING J.A.R.V.I.S.</div>
+  <div>&gt; LOCAL MODEL ............ ONLINE</div>
+  <div>&gt; SPEECH SYNTHESIS ....... ONLINE</div>
+  <div>&gt; RECOGNITION ............ ONLINE</div>
+  <div>&gt; GOOD AFTERNOON, SIR.</div>
+</div></div>
+
+<main>
+  <header>
+    <div class="brand">
+      <h1>JARVIS</h1><span class="sub">local · private</span>
+    </div>
+    <div class="hud-actions">
+      <button class="chip">Memory ▾</button>
+      <button class="chip">Speech</button>
+      <span class="status"><i></i>Online</span>
+    </div>
+  </header>
+
+  <section id="log">
+    <div class="msg from-j"><span class="tag">JARVIS</span>Good afternoon, sir. All systems are operating within normal parameters.</div>
+    <div class="msg from-u"><span class="tag">You</span>What's the status of the local model?</div>
+    <div class="msg from-j"><span class="tag">JARVIS</span>The local model is online and responding at approximately sixty-six tokens per second. Speech synthesis and recognition are both resident in memory, so there is no load penalty on the first request.</div>
+    <div class="msg from-u"><span class="tag">You</span>Good. Keep it that way.</div>
+    <div class="msg from-j"><span class="tag">JARVIS</span>Of course, sir.</div>
+  </section>
+
+  <footer>
+    <button class="reactor" id="orb">
+      <span class="ticks" id="ticks"></span>
+      <span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span>
+      <span class="core"></span>
+      <span class="wave"><b></b><b></b><b></b><b></b><b></b></span>
+      <span class="label" id="orbLabel">Hold to speak</span>
+    </button>
+    <div class="field">
+      <textarea placeholder="Type a message, or hold the reactor to speak…"></textarea>
+      <div class="row">
+        <button class="btn send">Send</button>
+        <button class="btn" onclick="setState('listening')">Demo: listening</button>
+        <button class="btn" onclick="setState('speaking')">Demo: speaking</button>
+        <button class="btn" onclick="setState('idle')">Demo: idle</button>
+        <button class="btn">Conversation</button>
+        <button class="btn">Clear</button>
+      </div>
+    </div>
+  </footer>
+</main>
+
+<div id="toast">Recognition active — release to transcribe</div>
+
+<script>
+const t=document.getElementById('ticks');
+for(let i=0;i<48;i++){const s=document.createElement('span');s.style.transform=`rotate(${i*7.5}deg)`;t.appendChild(s);}
+const orb=document.getElementById('orb'),lab=document.getElementById('orbLabel'),toast=document.getElementById('toast');
+let tm;
+function setState(s){
+  orb.className='reactor'+(s==='idle'?'':' '+s);
+  lab.textContent = s==='listening'?'Listening…' : s==='speaking'?'Speaking' : 'Hold to speak';
+  if(s!=='idle'){
+    toast.textContent = s==='listening'?'Recognition active — release to transcribe':'Synthesizing reply — neural voice';
+    toast.classList.add('on'); clearTimeout(tm); tm=setTimeout(()=>toast.classList.remove('on'),3200);
+  }
+}
+</script>
+</body>
+</html>

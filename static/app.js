@@ -1839,5 +1839,9 @@ document.addEventListener('pointerdown', unlockAudio, {once: true});
 document.addEventListener('keydown', unlockAudio, {once: true});
 setupMemoryMenu();
 watchStatusHints();
+// Mirror the speaking state onto <body> so the arc reactor can pulse while JARVIS
+// talks. Polled rather than hooked into each assignment of speechActive, so no
+// call site can be missed and the speech logic stays untouched.
+setInterval(() => document.body.classList.toggle('jarvis-speaking', speechActive), 200);
 checkHealth();
 setInterval(checkHealth, 5000);
