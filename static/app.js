@@ -942,11 +942,17 @@ function streamTaskSettled(requestId, pending) {
   if (pendingSpeech.size !== 0 || requestId !== speechRequestId) return;
   const remainingMs = audioCtx ? Math.max(0, (streamClock - audioCtx.currentTime) * 1000) : 0;
   setTimeout(() => {
-    if (requestId === speechRequestId && pendingSpeech.size === 0) {
+    // Only return to idle once the scheduled audio has really finished. Do NOT
+    // reset streamClock here: sentences can settle between the LLM producing the
+    // next one, and zeroing the clock while audio is still queued would make the
+    // following sentence schedule at "now" — playing ON TOP of what is still
+    // speaking (heard as a sentence cutting off mid-word). A clock already in the
+    // past is handled naturally where the next sentence starts scheduling.
+    if (requestId === speechRequestId && pendingSpeech.size === 0
+        && (!audioCtx || streamClock <= audioCtx.currentTime + 0.05)) {
       speechActive = false;
       stopSpeechEl.disabled = true;
       speechHintEl.textContent = speechIdleMessage();
-      streamClock = 0;
     }
   }, remainingMs + 80);
 }
@@ -1025,18 +1031,36 @@ function queueSpeech(text, requestId, activeMessage = 'JARVIS is speaking while 
   speechQueue = task.catch(() => speechTaskFailed(requestId)).finally(() => speechTaskSettled(requestId, pending));
 }
 
-function speechBoundary(text, final) {
+// Chunking for streamed speech. Every chunk pays a fixed startup cost in the TTS
+// engine (text encoding + first tokens) — measured at ~1.8 s — before ANY of its
+// audio arrives. So a chunk whose spoken audio is shorter than the next chunk's
+// startup drains the buffer and leaves an audible gap: "You're welcome!" is 15
+// characters ≈ 0.8 s of speech, which cannot cover the following 1.8 s wait.
+// At the measured ~19 characters/second of speech, ~90 characters (≈4.7 s) covers
+// it comfortably, so short sentences are merged forward rather than spoken alone.
+// The first chunk of a reply uses a smaller minimum so speech still starts
+// promptly (~50 chars ≈ 2.6 s, still longer than the next chunk's startup).
+const SPEECH_MIN_CHARS = 90;
+const SPEECH_FIRST_MIN_CHARS = 50;
+const SPEECH_MAX_CHARS = 220;
+
+function speechBoundary(text, final, minChars = SPEECH_MIN_CHARS) {
   for (let index = 0; index < text.length; index++) {
     const character = text[index];
-    if (character === '\n') return index + 1;
-    if ('.!?'.includes(character) && (index === text.length - 1 || /\s/.test(text[index + 1]))) return index + 1;
+    let end = -1;
+    if (character === '\n') end = index + 1;
+    else if ('.!?'.includes(character) && (index === text.length - 1 || /\s/.test(text[index + 1]))) end = index + 1;
+    // A sentence end that would produce too short a chunk is skipped, so the
+    // short sentence is spoken together with the text that follows it.
+    if (end >= 0 && end >= minChars) return end;
   }
-  if (text.length >= 220) {
-    const window = text.slice(0, 220);
+  if (text.length >= SPEECH_MAX_CHARS) {
+    const window = text.slice(0, SPEECH_MAX_CHARS);
     let boundary = Math.max(window.lastIndexOf(', '), window.lastIndexOf('; '), window.lastIndexOf(': '));
-    if (boundary < 80) boundary = window.lastIndexOf(' ');
-    if (boundary >= 80) return boundary + 1;
+    if (boundary < minChars) boundary = window.lastIndexOf(' ');
+    if (boundary >= minChars) return boundary + 1;
   }
+  // The final chunk has nothing after it, so a short one costs no gap.
   return final ? text.length : -1;
 }
 
@@ -1044,11 +1068,14 @@ function feedSpeech(stream, value, final = false) {
   if (!stream || stream.requestId !== speechRequestId) return;
   stream.buffer += value;
   while (stream.buffer) {
-    const boundary = speechBoundary(stream.buffer, final);
+    const minChars = stream.spoken ? SPEECH_MIN_CHARS : SPEECH_FIRST_MIN_CHARS;
+    const boundary = speechBoundary(stream.buffer, final, minChars);
     if (boundary < 0) break;
     const chunk = stream.buffer.slice(0, boundary).trim();
     stream.buffer = stream.buffer.slice(boundary).trimStart();
+    if (!chunk) continue;
     queueSpeech(chunk, stream.requestId);
+    stream.spoken = true;
   }
 }
 

@@ -269,9 +269,43 @@ on **loopback** (`http://localhost:8787` in the RDP browser) — the LAN/HTTPS p
   Regression test `test_fish_health_is_sticky_while_busy`; 137 tests green. (This
   same flap almost certainly explains the earlier "cut after (chainring)" report —
   that was a later sentence in its reply.)
-- **Remaining voice note:** initial ~1–1.5 s before the first word is inherent (LLM
-  first-sentence + first Fish chunk). Fish renders parentheticals ~1.2 s shorter
-  (rushes them), which can sound a touch abrupt but is complete audio.
+- **Sentences cutting off mid-word — ROOT-CAUSED + FIXED (2026-07-30).** Symptom:
+  a sentence stops mid-word and the next one starts immediately. NOT truncation —
+  it was **overlap**. `streamTaskSettled` reset `streamClock = 0` on a timer when
+  `pendingSpeech` was momentarily empty (which happens between sentences whenever
+  Fish finishes generating before the LLM emits the next sentence). With the clock
+  zeroed while ~10 s of audio was still queued, the next sentence scheduled at
+  "now" and played **on top of** the still-speaking audio, drowning its tail. Fix:
+  never zero `streamClock` there, and only return to idle once
+  `streamClock <= currentTime` (a clock already in the past is handled naturally
+  where the next sentence starts scheduling). Verified live: clock stayed 9–16 s
+  ahead of playback throughout a 6-sentence reply, going negative only after all
+  audio finished. Confirmed Fish itself is NOT truncating — the two reported
+  sentences render fully (6.97 s / 11.47 s streamed ≈ their blob renders).
+- **Gap after a SHORT sentence — FIXED by minimum-size chunking (2026-07-30).**
+  Every TTS chunk pays a fixed **~1.8 s engine startup** (text encode + first
+  tokens) before any of its audio arrives, so a chunk whose spoken audio is shorter
+  than that drains the buffer and leaves an audible gap. "You're welcome!" = 15
+  chars ≈ 0.8 s of speech → guaranteed gap before the next sentence. Fix in
+  `speechBoundary`/`feedSpeech`: a sentence end that would yield fewer than
+  `SPEECH_MIN_CHARS` (90 ≈ 4.7 s at the measured ~19 chars/s) is **skipped**, so
+  short sentences merge forward into the next chunk. The first chunk of a reply
+  uses `SPEECH_FIRST_MIN_CHARS` (50 ≈ 2.6 s — still > the 1.8 s startup) so speech
+  starts promptly; the final chunk is exempt (nothing follows it, so no gap).
+  `SPEECH_MAX_CHARS` (220) unchanged. Note the counter-intuitive part: chunking
+  *smaller* (e.g. by word count) makes this WORSE — more boundaries, each paying
+  the startup — so the lever is a minimum, not a maximum.
+- **Why speech seems to start only after the reply finishes (measured, expected).**
+  Text IS already streamed to TTS sentence-by-sentence (`feedSpeech`/`speechBoundary`
+  split at sentence boundaries and queue each as it arrives). Measured on a
+  6-sentence reply: sentences queued at t=538/741/1252/2070/2661/3377 ms, **LLM
+  finished at 3420 ms**, but Fish's **first audio chunk only arrived at ~3.7 s**.
+  The LLM is simply faster than Fish's first render. GPU contention makes it worse:
+  first-chunk latency was **3.7 s while llama.cpp was generating vs ~1.8–2.0 s once
+  it had finished** (both share the RTX 3060). So the gap is Fish render speed under
+  contention, not missing text streaming. Levers if it matters later: smaller/faster
+  TTS for the first sentence, splitting the first sentence at a comma to shorten the
+  first render, or serialising LLM/TTS GPU use.
 
 ## STILL TO DO (8)
 
