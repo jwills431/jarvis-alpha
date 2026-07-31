@@ -35,8 +35,13 @@ box for the extra VRAM and to host JARVIS on the network.
   voice-tuning panel, TTS pipelining, and low-latency Fish audio streaming
   (`/api/speak/stream`, raw PCM → Web Audio); server instability fixed by dropping
   RAM 6200→5000 MT/s; `start_jarvis.ps1`/`stop_jarvis.ps1` added; 136 tests green.**
-  Next: LAN mic (RDP redirection) + Step 8 LAN test + more voice-quality tuning.
-  Full resume note: `docs/SERVER_BUILD_PROGRESS.md`.
+  **2026-07-31: Step 8 DONE — JARVIS is hosted on the LAN over HTTPS with Basic
+  auth and used from a phone (its own mic + speaker); the on-device voice test
+  passed.** Required `networkingMode=mirrored` in `.wslconfig` (a 0.0.0.0 bind
+  inside WSL is invisible to the LAN otherwise). Also added a mobile layout,
+  a resident whisper-server for STT, and a measured voice-latency budget (~2.4 s
+  button-release → first word). Next: run `jarvis_server_tuning.ps1` as admin,
+  then the BIOS update. Full resume note: `docs/SERVER_BUILD_PROGRESS.md`.
 
 ## The dedicated server (this machine)
 

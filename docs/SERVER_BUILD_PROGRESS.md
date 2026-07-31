@@ -348,22 +348,75 @@ is released to the first spoken word:
   would raise Fish's ~60 tok/s roughly in proportion) or a faster TTS model in the
   same voice — not mixing engines within a reply.
 
-## STILL TO DO (8)
+## DONE — Step 8: private-LAN hosting + on-device voice test (2026-07-31)
 
-- **8. End-to-end voice test (NEXT ACTION)** — from another LAN device over
-  HTTPS: log in, confirm the mic works (TLS unlocks it off-localhost), speak,
-  and hear the Fish reply play *on that device* (browser playback). Add the
-  device-scoped Windows firewall rule and confirm the box is not reachable from
-  outside the LAN. This is on-device work that must run on the server + a phone/
-  laptop; the code side is ready.
-- **Mic in the RDP session.** Voice INPUT failed while testing on the server because
-  an RDP session has no microphone unless the *client* enables it: mstsc → Local
-  Resources → Remote audio → Settings → "Record from this computer" → reconnect.
-  Server side already allows it (`fDisableAudioCapture=0`). The user's Jabra is on
-  the client. (Text + voice OUTPUT work in the RDP session; only capture was missing.)
-  The LAN model (talk to JARVIS from a client's own browser) sidesteps this entirely.
+**The original goal of the whole server build is now working**: JARVIS is hosted
+on GUItech-CORE and used from a phone over the LAN, with the phone's own mic and
+speaker. Joseph confirmed the on-device voice test "worked much better".
+
+- **Config** (`config.local.json`, gitignored): `app_host: "0.0.0.0"`,
+  `tls_cert`/`tls_key` → `certs/`, `auth_*` from `scripts/make_auth.py`,
+  `tts_playback: "browser"`. LAN IP **192.168.7.83**, host `guitech-core`.
+- **Cert**: `scripts/make_tls_cert.sh 192.168.7.83 guitech-core` → SANs cover
+  localhost, 127.0.0.1, ::1, the LAN IP and hostname. Valid to Nov 2028.
+- **Firewall**: `jarvis_firewall_rule.ps1` (repo root, run as admin) allows
+  inbound TCP 8787 **only** from `192.168.4.0/22` (the /22 subnet 192.168.7.83
+  belongs to). Everything off-LAN is refused.
+- **THE BLOCKER — WSL2 networking.** Binding `0.0.0.0` *inside WSL* binds the WSL
+  VM's own network namespace, NOT the Windows LAN interface: Windows only
+  auto-forwards *localhost*, so the LAN saw "connection actively refused" while
+  the app was demonstrably listening. Fix: **`networkingMode=mirrored`** in
+  `.wslconfig` (needs Win11 22621+; this box is 25H2/26200), plus
+  `[experimental] hostAddressLoopback=true`. After `wsl --shutdown`, WSL reports
+  the *same* IP as Windows (192.168.7.83) and LAN binds just work. Chosen over
+  `netsh portproxy` because the WSL IP changes on most restarts, which would need
+  re-creating the proxy on a 24/7 box.
+- **iOS/WebKit auth gotcha.** The 401 challenge originally carried
+  `charset="UTF-8"`; WebKit (every browser on iOS) then failed to show its login
+  prompt and rendered the raw `{"error":"unauthorized"}` body instead. Simplified
+  to `WWW-Authenticate: Basic realm="JARVIS"` and the prompt appears. Safari also
+  refuses to proceed past a self-signed cert as readily as Firefox — to use
+  Safari, install `certs/jarvis.crt` as a trusted profile (Settings → General →
+  About → Certificate Trust Settings) rather than clicking through the warning.
+- Verified: LAN TCP reachable, 401 without credentials and with a wrong password,
+  cert presented correctly on the LAN address, llama + Fish still loopback-only.
+
+## Server lean checklist — status (2026-07-31)
+
+1. **Power plan** ✅ High Performance; sleep and hibernate never (display off ok).
+2. **`.wslconfig`** ✅ `memory=52GB processors=16 swap=16GB autoMemoryReclaim=gradual`
+   + `networkingMode=mirrored`. Fixed the llama.cpp `-j` OOM and the LAN bind.
+3. **Windows Update** ⚠️ Active hours 5–23 + `NoAutoRebootWithLoggedOnUsers` are
+   set by `jarvis_server_tuning.ps1` (admin). **Windows silently deleted this key
+   once already** — if the box ever reboots unexpectedly, re-run that script.
+4. **Startup trim** ✅ OneDrive (HKCU) and both Logitech Download Assistant entries
+   (HKLM) disabled. Realtek audio + Defender tray intentionally left enabled.
+5. **Defender exclusions** ✅/verify — the WSL disk
+   (`%LOCALAPPDATA%\wsl\{78caa623-…}`, a 30.7 GB `ext4.vhdx`) and the project
+   folder, applied by `jarvis_server_tuning.ps1`. Real-time protection stays ON.
+6. **NVIDIA** ✅ Nothing to do: no GeForce Experience/overlay processes, ~1 GB idle
+   VRAM, 42 °C idle.
+
+`jarvis_server_tuning.ps1` is idempotent — re-run it any time to verify or repair
+items 3–5.
+
+## STILL TO DO
+
+- **Run `jarvis_server_tuning.ps1` as admin** to close out lean-checklist items 3–5
+  (Windows Update active hours + no forced reboot; verify Defender exclusions).
 - **BIOS update** (ASUS TUF A620M-PLUS, still on 2613 / 2024-04) for additional AM5
-  memory-stability margin, and finish the lean checklist (run `jarvis_server_tuning.ps1`).
+  memory-stability margin. RAM currently 5000 MT/s and stable — see
+  `jarvis-server-instability` memory before touching memory settings.
+- **Considering a newer GPU** (Joseph, 2026-07-31 — not decided). Fish generation is
+  memory-bandwidth bound at ~60 tok/s on the 3060 (~360 GB/s), so a ~700 GB/s card
+  would roughly halve time-to-first-audio (~1.4 s → ~0.8 s) and a ~1 TB/s card a bit
+  more. Caveats: there is a fixed ~0.85 s floor in Fish that does not scale with the
+  GPU; extra VRAM would also remove LLM/TTS contention (measured ~1.9 s penalty on
+  the first render) and allow a larger LLM. Realistic whole-trip effect ~2.4 s → ~1.7 s.
+- **Mic in an RDP session (informational).** RDP has no microphone unless the *client*
+  enables it: mstsc → Local Resources → Remote audio → Settings → "Record from this
+  computer" → reconnect. Server side already allows it (`fDisableAudioCapture=0`).
+  Largely moot now that voice runs from a LAN device's own browser.
 
 ## Design boundary change — loopback-only → private LAN host (2026-07-25)
 
