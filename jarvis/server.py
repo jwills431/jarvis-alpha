@@ -738,8 +738,12 @@ TOOL_SYSTEM_GUIDANCE = (
     "at 6:30pm to call mum' -> set_reminder(message='call mum', at_time='6:30pm'). "
     "Whenever the user states what to be reminded of, you MUST include it as "
     "set_reminder's message — omitting the task is a mistake; only a bare alarm "
-    "with no stated task may omit it. Always actually call the tool; never just "
-    "say you will remind them."
+    "with no stated task may omit it. CRITICAL: to set a timer or reminder you "
+    "MUST emit the tool call. Never write a confirmation like 'I've set a timer' "
+    "or state a fire time unless you actually called the tool and received its "
+    "result — a claimed timer that was not created through the tool is a serious "
+    "error. Take the fire time only from the tool result, never from your own "
+    "arithmetic."
 )
 
 

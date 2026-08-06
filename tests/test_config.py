@@ -104,6 +104,11 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config.tools_enabled)
         self.assertFalse(config.tool_grammar_enabled)
 
+    def test_tool_temperature_default_and_bounds(self):
+        self.assertEqual(Config().validate().tool_temperature, 0.3)
+        with self.assertRaises(ValueError):
+            Config(tool_temperature=3).validate()
+
     def test_tools_enabled_config_validates(self):
         config = Config(tools_enabled=True, tool_grammar_enabled=True,
                         tool_max_iterations=4, tool_call_timeout_seconds=10).validate()

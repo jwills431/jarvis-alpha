@@ -62,6 +62,20 @@ def test_backend_flags_malformed_arguments():
     assert calls[0]["malformed"] is True and calls[0]["arguments"] is None
 
 
+def test_stream_chat_tools_uses_tool_temperature():
+    captured = {}
+
+    def fake(request, timeout=None):
+        captured["body"] = json.loads(request.data)
+        return _FakeResponse([b"data: [DONE]\n"])
+
+    with patch("jarvis.backend._headers", return_value={}), \
+         patch("jarvis.backend.urllib.request.urlopen", side_effect=fake):
+        list(backend.stream_chat_tools(Config(tool_temperature=0.25),
+                                       [{"role": "user", "content": "hi"}], []))
+    assert captured["body"]["temperature"] == 0.25  # tool_temperature, not the conversational one
+
+
 def test_backend_streams_plain_content():
     events = _run_stream_tools([
         b'data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}\n',

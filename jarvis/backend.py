@@ -131,7 +131,8 @@ def stream_chat_tools(
         "model": config.model,
         "messages": messages,
         "stream": True,
-        "temperature": config.temperature,
+        # Lower, tool-specific temperature for more reliable tool-calling on a 7B.
+        "temperature": config.tool_temperature,
         "max_tokens": config.max_tokens,
         "tools": tools,
         "tool_choice": "auto",

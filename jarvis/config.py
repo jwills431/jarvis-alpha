@@ -68,6 +68,12 @@ class Config:
     # prior test are unchanged until this is explicitly turned on. When enabled,
     # /api/chat runs the server-side propose->validate->execute->feed-back loop.
     tools_enabled: bool = False
+    # Sampling temperature for tool-enabled turns. Lower than the conversational
+    # `temperature` on purpose: a 7B follows the tool-calling protocol far more
+    # reliably when it is more deterministic, which reduces "claimed to set a
+    # timer but never called the tool" misses (a known limitation of Qwen-7B here
+    # — see docs/STAGE1_TIMERS.md). Only affects turns where tools are active.
+    tool_temperature: float = 0.3
     # Hybrid grammar mode. The primary path is llama.cpp's native tool-calling
     # (server started with --jinja), which constrains and returns tool_calls; our
     # own schema validation is the guarantee that a malformed call never runs. If
@@ -219,6 +225,8 @@ class Config:
             raise ValueError("tools_enabled must be a boolean")
         if type(self.tool_grammar_enabled) is not bool:
             raise ValueError("tool_grammar_enabled must be a boolean")
+        if not 0 <= self.tool_temperature <= 2:
+            raise ValueError("tool_temperature must be between 0 and 2")
         if not 1 <= self.tool_max_iterations <= 20:
             raise ValueError("tool_max_iterations must be between 1 and 20")
         if not 1 <= self.tool_call_timeout_seconds <= 120:

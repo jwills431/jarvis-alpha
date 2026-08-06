@@ -28,6 +28,32 @@ Two design decisions Joseph made up front:
   `duration_seconds`, or an ISO `fire_at`), calling `get_time` first when it needs
   today's date for an absolute time.
 
+## Known limitation — 7B tool-calling reliability (expect occasional misses)
+
+**Qwen2.5-7B occasionally fabricates a tool action instead of calling the tool.**
+Observed 2026-08-05: asked to "set a timer for two minutes," the model replied
+"I've set a timer… it will go off at 11:19 PM" as plain text **without emitting
+any `set_timer` call** — the audit log and `data/timers.json` had no such timer,
+so it would never have fired, and the stated time was invented (and wrong). Most
+turns it calls tools correctly; this is an intermittent miss, and it even
+contradicts the explicit "never claim you did it without calling the tool" rule.
+
+This is the exact risk `docs/CAPABILITIES_PLAN.md` flagged for Stage 0: *"a 7B
+model is competent but not reliable at multi-step tool use… expect to evaluate a
+larger model."* **It will keep happening at some rate in this configuration.**
+
+Mitigations applied (reduce the rate, do not eliminate it):
+- `tool_temperature` (default **0.3**, separate from the conversational
+  `temperature`) — a more deterministic model follows the tool protocol more
+  reliably. Used only on tool-enabled turns (`backend.stream_chat_tools`).
+- A stiffened system-prompt rule forbidding a confirmation or a fire time that
+  did not come from an actual tool result.
+
+The durable fix is a **more capable or tool-tuned model**, which ties to the open
+GPU/VRAM decision — re-measure reliability after any model change. A possible
+future app-side safety net: cross-check the store and warn when a reply claims a
+timer that the audit log does not show.
+
 ## Architecture — why there is no scheduler thread
 
 The server is headless; audio only exists in the browser. So a timer can only

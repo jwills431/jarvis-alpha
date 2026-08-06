@@ -68,8 +68,15 @@ occurrence) with an optional message — this was the key reliability fix; the m
 would otherwise fall back to `set_timer` rather than compute an ISO time. No
 scheduler thread — firing is wall-clock at poll time, so a pending timer survives a
 restart for free. Iterate on app code with `.\restart_app.ps1` (ships its launcher
-to WSL as base64 to dodge PowerShell/CRLF issues). 212 tests green. **Next: Stage 2
-(reading the web — the first egress, prompt-injection defence).**
+to WSL as base64 to dodge PowerShell/CRLF issues). 215 tests green.
+
+**Known limitation (config-dependent):** Qwen-7B intermittently *claims* a tool
+action without emitting the tool call (observed a fabricated "I set a timer" with
+no `set_timer` in the audit log). Mitigated with a lower `tool_temperature`
+(0.3) and a stiffened anti-fabrication prompt, but not eliminated — the durable
+fix is a more capable/tool-tuned model (ties to the GPU decision). The audit log
+is ground truth. See `docs/STAGE1_TIMERS.md` and the `jarvis-7b-toolcall-reliability`
+memory. **Next: Stage 2 (reading the web — the first egress, prompt-injection defence).**
 
 ## The dedicated server (this machine)
 

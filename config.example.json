@@ -49,6 +49,7 @@
 
   "tools_enabled": false,
   "tool_grammar_enabled": false,
+  "tool_temperature": 0.3,
   "tool_max_iterations": 6,
   "tool_call_timeout_seconds": 20,
   "tool_audit_path": "data/tool_audit.jsonl",
