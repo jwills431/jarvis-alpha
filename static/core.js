@@ -96,6 +96,18 @@
     return durableQuestion || durablePattern || (text.length >= 24 && !looksLikeRequest);
   }
 
+  // Built-in alert sound identifiers (the audio itself is synthesized in app.js).
+  const ALERT_SOUND_IDS = ['chime', 'bell', 'beep', 'arpeggio', 'alarm'];
+
+  function resolveAlertSound(stored, fallback) {
+    // A saved choice wins only while it still names a known sound; otherwise the
+    // per-type fallback, then the first sound. Keeps a stale localStorage value
+    // from selecting a sound that no longer exists.
+    if (ALERT_SOUND_IDS.includes(stored)) return stored;
+    if (ALERT_SOUND_IDS.includes(fallback)) return fallback;
+    return ALERT_SOUND_IDS[0];
+  }
+
   function formatMessageTimestamp(value) {
     // e.g. "10:30 PM · 8/5/2026". Manual formatting (not toLocaleString) so it
     // is deterministic and unit-testable regardless of the host locale.
@@ -236,6 +248,8 @@
   }
 
   root.JarvisCore = Object.freeze({
+    ALERT_SOUND_IDS,
+    resolveAlertSound,
     isConversationStopCommand,
     normalizeConversationCommand,
     unsupportedActionResponse,

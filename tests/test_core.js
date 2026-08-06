@@ -14,6 +14,8 @@ const {
   formatMessageTimestamp,
   formatTimerAlert,
   parseStreamLine,
+  ALERT_SOUND_IDS,
+  resolveAlertSound,
   resolveSpeechSelection,
   shouldConsiderAutoMemory,
   trimConversationHistory,
@@ -232,3 +234,11 @@ assert.strictEqual(formatMessageTimestamp(new Date(2026, 7, 5, 0, 0)), '12:00 AM
 assert.strictEqual(formatMessageTimestamp(new Date(2026, 7, 5, 12, 0)), '12:00 PM · 8/5/2026');
 assert.strictEqual(formatMessageTimestamp('not a date'), '');
 console.log('message timestamp formatting: ok');
+
+// ---------- resolveAlertSound (stored choice validated against known ids) ----------
+assert.ok(ALERT_SOUND_IDS.includes('chime') && ALERT_SOUND_IDS.includes('alarm'));
+assert.strictEqual(resolveAlertSound('bell', 'chime'), 'bell');          // valid stored wins
+assert.strictEqual(resolveAlertSound('nonexistent', 'chime'), 'chime');  // fall back to per-type default
+assert.strictEqual(resolveAlertSound(null, 'beep'), 'beep');             // no stored -> fallback
+assert.strictEqual(resolveAlertSound('nope', 'alsobad'), ALERT_SOUND_IDS[0]); // both invalid -> first
+console.log('alert sound selection: ok');

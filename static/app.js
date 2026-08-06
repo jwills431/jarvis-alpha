@@ -53,6 +53,8 @@ const fishControls = {
   max_new_tokens: {input: document.querySelector('#fish-max-tokens'), value: document.querySelector('#fish-max-tokens-value'), integer: true},
 };
 const {
+  ALERT_SOUND_IDS,
+  resolveAlertSound,
   countUnsupportedScriptCharacters,
   formatConversationTranscript,
   formatLearnMemory,
@@ -545,6 +547,78 @@ function audioSink() {
   return analyserNode;
 }
 
+// Synthesized alert sounds for fired timers/reminders. Each is a list of notes
+// {f: Hz, t: start offset s, d: duration s, type: waveform, g: peak gain}. No
+// audio files are shipped: everything is generated with Web Audio, so it works
+// offline and adds nothing to serve. Labels drive the settings dropdowns.
+const ALERT_SOUNDS = {
+  chime: {label: 'Chime (gentle)', notes: [
+    {f: 660, t: 0.00, d: 0.5, type: 'sine', g: 0.3},
+    {f: 880, t: 0.14, d: 0.6, type: 'sine', g: 0.3},
+    {f: 1320, t: 0.28, d: 0.7, type: 'sine', g: 0.25},
+  ]},
+  bell: {label: 'Bell', notes: [
+    {f: 1046, t: 0.00, d: 1.1, type: 'sine', g: 0.3},
+    {f: 2093, t: 0.00, d: 0.9, type: 'sine', g: 0.12},
+    {f: 3140, t: 0.00, d: 0.5, type: 'sine', g: 0.05},
+  ]},
+  beep: {label: 'Digital beeps', notes: [
+    {f: 880, t: 0.00, d: 0.12, type: 'square', g: 0.18},
+    {f: 880, t: 0.20, d: 0.12, type: 'square', g: 0.18},
+    {f: 880, t: 0.40, d: 0.12, type: 'square', g: 0.18},
+  ]},
+  arpeggio: {label: 'Arpeggio', notes: [
+    {f: 523, t: 0.00, d: 0.2, type: 'triangle', g: 0.3},
+    {f: 659, t: 0.12, d: 0.2, type: 'triangle', g: 0.3},
+    {f: 784, t: 0.24, d: 0.2, type: 'triangle', g: 0.3},
+    {f: 1046, t: 0.36, d: 0.4, type: 'triangle', g: 0.3},
+  ]},
+  alarm: {label: 'Alarm (urgent)', notes: [
+    {f: 740, t: 0.00, d: 0.18, type: 'sawtooth', g: 0.22},
+    {f: 988, t: 0.20, d: 0.18, type: 'sawtooth', g: 0.22},
+    {f: 740, t: 0.40, d: 0.18, type: 'sawtooth', g: 0.22},
+    {f: 988, t: 0.60, d: 0.18, type: 'sawtooth', g: 0.22},
+  ]},
+};
+
+const ALERT_DEFAULTS = {timer: 'beep', reminder: 'chime'};
+
+function alertSoundFor(kind) {
+  const key = kind === 'timer' ? 'jarvis.alert.timer' : 'jarvis.alert.reminder';
+  return resolveAlertSound(storedSpeechSetting(key), ALERT_DEFAULTS[kind] || 'chime');
+}
+
+// Play one synthesized alert. Routes through audioSink() so it also drives the
+// orb animation, and plays regardless of the voice-mute toggle (it is an alarm).
+// Resolves when the sound has finished so a spoken announcement can follow.
+function playAlertSound(id) {
+  const ctx = getAudioContext();
+  const sink = audioSink();
+  if (!ctx || !sink) return Promise.resolve();
+  const sound = ALERT_SOUNDS[id] || ALERT_SOUNDS[ALERT_SOUND_IDS[0]];
+  const base = ctx.currentTime + 0.03;
+  let end = base;
+  for (const note of sound.notes) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = note.type || 'sine';
+    osc.frequency.value = note.f;
+    const start = base + note.t;
+    const stop = start + note.d;
+    const peak = note.g == null ? 0.25 : note.g;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(peak, start + Math.min(0.02, note.d * 0.3));
+    gain.gain.exponentialRampToValueAtTime(0.0001, stop);
+    osc.connect(gain);
+    gain.connect(sink);
+    osc.start(start);
+    osc.stop(stop + 0.03);
+    end = Math.max(end, stop);
+  }
+  startAmpLoop();
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, (end - ctx.currentTime)) * 1000 + 40));
+}
+
 function stopAmpLoop() {
   if (ampRaf) cancelAnimationFrame(ampRaf);
   ampRaf = 0;
@@ -1009,6 +1083,50 @@ function speakFiredTimers(list) {
   queueSpeech(spoken, requestId, 'JARVIS is announcing a timer.');
 }
 
+async function announceFiredTimers(list) {
+  // Play the alert sound(s) first — always, even when the voice is muted — then
+  // the spoken announcement (if voice is on). Distinct sounds per kind, played
+  // once each, so a timer and a reminder firing together are distinguishable.
+  const kinds = [...new Set(list.map((fired) => fired.kind))];
+  for (const kind of kinds) {
+    try { await playAlertSound(alertSoundFor(kind)); } catch { /* audio optional */ }
+  }
+  speakFiredTimers(list);
+}
+
+function populateAlertSelect(select, kind) {
+  if (!select) return;
+  select.replaceChildren();
+  for (const id of ALERT_SOUND_IDS) {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = (ALERT_SOUNDS[id] && ALERT_SOUNDS[id].label) || id;
+    select.appendChild(option);
+  }
+  select.value = alertSoundFor(kind);
+}
+
+function initAlertSounds() {
+  const timerSelect = document.querySelector('#alert-timer-sound');
+  const reminderSelect = document.querySelector('#alert-reminder-sound');
+  const timerPreview = document.querySelector('#alert-timer-preview');
+  const reminderPreview = document.querySelector('#alert-reminder-preview');
+  populateAlertSelect(timerSelect, 'timer');
+  populateAlertSelect(reminderSelect, 'reminder');
+  if (timerSelect) timerSelect.addEventListener('change', () => {
+    storeSpeechSetting('jarvis.alert.timer', timerSelect.value);
+    void playAlertSound(timerSelect.value);
+  });
+  if (reminderSelect) reminderSelect.addEventListener('change', () => {
+    storeSpeechSetting('jarvis.alert.reminder', reminderSelect.value);
+    void playAlertSound(reminderSelect.value);
+  });
+  if (timerPreview) timerPreview.addEventListener('click', () => timerSelect && void playAlertSound(timerSelect.value));
+  if (reminderPreview) reminderPreview.addEventListener('click', () => reminderSelect && void playAlertSound(reminderSelect.value));
+}
+
+initAlertSounds();
+
 async function pollTimers() {
   if (timerPollInFlight) return;
   timerPollInFlight = true;
@@ -1018,7 +1136,7 @@ async function pollTimers() {
     const data = await response.json();
     if (Array.isArray(data.fired) && data.fired.length) {
       data.fired.forEach(renderFiredTimerCard);
-      speakFiredTimers(data.fired);
+      void announceFiredTimers(data.fired);
     }
   } catch {
     // Transient (e.g. app briefly down); the next tick retries.

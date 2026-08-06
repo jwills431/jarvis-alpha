@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>JARVIS Alpha</title>
-  <link rel="stylesheet" href="/styles.css?v=14">
+  <link rel="stylesheet" href="/styles.css?v=15">
 </head>
 <body>
   <div id="boot">
@@ -109,12 +109,20 @@
           <label class="visible-label" for="speech-stream"><input type="checkbox" id="speech-stream"> Low-latency streaming (start speaking as it renders)</label>
           <p>Neural-voice settings apply live in this browser. Use Preview to hear a change before saving.</p>
         </fieldset>
+        <fieldset id="alert-sounds">
+          <legend>Timer &amp; reminder alert sounds</legend>
+          <label for="alert-timer-sound" class="visible-label">Timer sound</label>
+          <div class="alert-row"><select id="alert-timer-sound"></select><button id="alert-timer-preview" type="button">Play</button></div>
+          <label for="alert-reminder-sound" class="visible-label">Reminder sound</label>
+          <div class="alert-row"><select id="alert-reminder-sound"></select><button id="alert-reminder-preview" type="button">Play</button></div>
+          <p>Plays when a timer or reminder fires, even if the voice is muted. Saved in this browser.</p>
+        </fieldset>
         <p>These preferences stay in this browser on the loopback JARVIS origin. They do not change macOS voice settings.</p>
         <div><button id="speech-defaults" type="button">Use defaults</button><button id="speech-preview" type="button">Preview</button><button id="speech-settings-save" type="submit">Save speech settings</button></div>
       </form>
     </section>
   </div>
-  <script src="/core.js?v=14"></script>
-  <script src="/app.js?v=14"></script>
+  <script src="/core.js?v=15"></script>
+  <script src="/app.js?v=15"></script>
 </body>
 </html>

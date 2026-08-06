@@ -111,6 +111,8 @@ article.tool-call.decided-deny{border-left-color:#ff6b6b;opacity:.8}
 article.timer-alert{align-self:stretch;background:rgba(255,204,102,.10);border:1px solid rgba(255,204,102,.35);
   border-left:2px solid #ffcc66;font-weight:600}
 article.timer-alert::before{content:"Alert";color:#ffcc66}
+#alert-sounds .alert-row{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+#alert-sounds .alert-row select{flex:1}
 
 /* ---------- composer ---------- */
 form{border-top:1px solid var(--line);padding-top:13px}

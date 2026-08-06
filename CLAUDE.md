@@ -76,7 +76,23 @@ no `set_timer` in the audit log). Mitigated with a lower `tool_temperature`
 (0.3) and a stiffened anti-fabrication prompt, but not eliminated — the durable
 fix is a more capable/tool-tuned model (ties to the GPU decision). The audit log
 is ground truth. See `docs/STAGE1_TIMERS.md` and the `jarvis-7b-toolcall-reliability`
-memory. **Next: Stage 2 (reading the web — the first egress, prompt-injection defence).**
+memory.
+
+**Timer/reminder alert sounds (shipped 2026-08-05):** a fired timer/reminder now
+plays a synthesized Web-Audio alert (client-side, distinct sound per kind,
+always audible even when voice is muted, then the spoken announcement) chosen
+from a built-in set in the Speech settings panel; choice persists per-browser
+(`jarvis.alert.timer`/`jarvis.alert.reminder`). Pure JS (`ALERT_SOUNDS` in
+`app.js`, `resolveAlertSound` in `core.js`), no assets shipped.
+
+**Planned next (Joseph's request, deferred to a future session):
+server-side custom alert sound files** — upload your own audio to the JARVIS
+server so a custom sound is shared across every device/browser. Chosen the
+server-side (shared) option over browser-local. It's a bigger, more sensitive
+build: a file-upload endpoint, on-disk storage (under `data/`), type/size
+validation, serving with correct MIME, and a CSP update — do it as its own
+focused pass. **Also next: Stage 2 (reading the web — the first egress,
+prompt-injection defence).**
 
 ## The dedicated server (this machine)
 
