@@ -1,14 +1,14 @@
 # stop_jarvis.ps1 - cleanly stop the JARVIS stack (app + llama.cpp + whisper + Fish)
 # running in WSL. Elevation is NOT required: the services run in WSL as your user.
 #
-#   .\stop_jarvis.ps1              stop the services, then offer to shut WSL down
-#   .\stop_jarvis.ps1 -KeepWsl     stop the services only (use when restarting)
-#   .\stop_jarvis.ps1 -Shutdown    stop the services and shut WSL down, no prompt
+#   .\stop_jarvis.ps1              stop the services, leave WSL running (fast restart)
+#   .\stop_jarvis.ps1 -Shutdown    stop the services AND shut WSL down (release memory)
+#   .\stop_jarvis.ps1 -KeepWsl     same as the default; kept for compatibility
 #
-# Shutting WSL down releases the VM's memory, which is worth doing before the
-# machine goes off for the night. It is deliberately not automatic: it kills
-# EVERY WSL distro and anything else running inside them, so a plain stop before
-# a restart should leave the VM up.
+# A plain stop leaves the WSL VM up, so a following start_jarvis is quick and Fish
+# does not have to pay its ~2-minute warmup again. Shutting WSL down releases the
+# VM's memory (worth doing before the machine goes off for the night) but kills
+# EVERY WSL distro and anything running inside them, so it is opt-in via -Shutdown.
 
 param(
   [switch]$KeepWsl,
@@ -45,43 +45,16 @@ if ($stopped) {
   Write-Host "Re-run this script, or use: wsl --shutdown" -ForegroundColor Yellow
 }
 
-if ($KeepWsl) {
-  Write-Host "`nWSL left running (-KeepWsl). Start again with .\start_jarvis.ps1" -ForegroundColor DarkGray
+# WSL is left running by default so a following start_jarvis is fast. Only tear
+# the VM down when -Shutdown is passed. -KeepWsl is accepted for compatibility
+# and is now the default, so it takes precedence over nothing to do.
+if (-not $Shutdown) {
+  Write-Host "`nWSL left running. Restart quickly with .\start_jarvis.ps1 (add -Tools for the tool loop)." -ForegroundColor DarkGray
+  Write-Host "To release the VM's memory (e.g. overnight), re-run with -Shutdown." -ForegroundColor DarkGray
   return
 }
 
-if (-not $Shutdown) {
-  # Countdown backstop. Any key cancels; left alone it proceeds, since stopping
-  # for the night is the usual reason to run this without arguments.
-  Write-Host ""
-  Write-Host "Shutting WSL down in 10s to release its memory. Press any key to skip." -ForegroundColor Cyan
-  $deadline = (Get-Date).AddSeconds(10)
-  $cancelled = $false
-  try {
-    while ((Get-Date) -lt $deadline) {
-      if ($Host.UI.RawUI.KeyAvailable) {
-        $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown') | Out-Null
-        $cancelled = $true
-        break
-      }
-      $left = [int][math]::Ceiling(($deadline - (Get-Date)).TotalSeconds)
-      Write-Host -NoNewline "`r  $left... "
-      Start-Sleep -Milliseconds 200
-    }
-  } catch {
-    # No interactive console (piped or scheduled): do not shut down on a guess.
-    Write-Host "`rNon-interactive session; leaving WSL running." -ForegroundColor DarkGray
-    Write-Host "Use -Shutdown to force it, or run: wsl --shutdown" -ForegroundColor DarkGray
-    return
-  }
-  Write-Host "`r              "
-  if ($cancelled) {
-    Write-Host "Skipped. WSL is still running." -ForegroundColor DarkGray
-    return
-  }
-}
-
-Write-Host "Shutting down WSL..." -ForegroundColor Cyan
+Write-Host "`nShutting down WSL (this can take up to a minute)..." -ForegroundColor Cyan
 wsl --shutdown
 Start-Sleep -Seconds 2
 Write-Host "WSL shut down. Memory released; safe to power off." -ForegroundColor Green

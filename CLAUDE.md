@@ -43,6 +43,22 @@ box for the extra VRAM and to host JARVIS on the network.
   button-release → first word). Next: run `jarvis_server_tuning.ps1` as admin,
   then the BIOS update. Full resume note: `docs/SERVER_BUILD_PROGRESS.md`.
 
+## Capabilities work (post-migration) — Stage 0 tool loop
+
+The next chapter is `docs/CAPABILITIES_PLAN.md` (staged: tool loop → timers → web
+→ files → machine control → integrations). **Stage 0 (the tool loop) is DONE —
+implemented and verified on-device 2026-08-05.** It is gated behind
+`tools_enabled` (default **false**), so with tools off the app is unchanged. New:
+`jarvis/tools.py` (registry, schema validation, GBNF grammar, audit log,
+`get_time`), `jarvis/agent.py` (the loop + confirmation gate + `PendingActions`),
+`backend.stream_chat_tools`, `/api/tools/<id>/approve|deny`, and frontend tool
+cards. 186 tests green (Python + node), none needing the GPU. Run the tool loop
+with llama-server on `--jinja` (`.\start_jarvis.ps1 -Tools`) and
+`tools_enabled: true`; iterate on app/tool code with `.\restart_app.ps1` (no Fish
+re-warm). **Next: Stage 1 (clock/timers/reminders) — the first real
+side-effecting tools, which exercise the confirmation gate.** Full detail and the
+on-device checklist: `docs/STAGE0_TOOL_LOOP.md`.
+
 ## The dedicated server (this machine)
 
 - Ryzen 7 7800X3D / **RTX 3060 12 GB** / 64 GB DDR5 / 4 TB NVMe. Fresh Windows 11,
@@ -95,6 +111,8 @@ box for the extra VRAM and to host JARVIS on the network.
 
 ## Doc map
 
+- `docs/CAPABILITIES_PLAN.md` — staged plan for giving JARVIS the ability to act.
+- `docs/STAGE0_TOOL_LOOP.md` — Stage 0 tool-loop design + on-device checklist.
 - `docs/SERVER_BUILD_PROGRESS.md` — newest, authoritative server resume note.
 - `docs/HANDOFF.md` — Mac-side voice-engine work + the architecture fork.
 - `docs/JARVIS_SERVER_PLAN.md`, `docs/PC_FISH_SESSION.md` — server plan + Fish setup.

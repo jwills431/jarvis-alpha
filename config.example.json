@@ -47,6 +47,12 @@
   "max_tokens": 512,
   "temperature": 0.6,
 
+  "tools_enabled": false,
+  "tool_grammar_enabled": false,
+  "tool_max_iterations": 6,
+  "tool_call_timeout_seconds": 20,
+  "tool_audit_path": "data/tool_audit.jsonl",
+
   "tls_cert": "",
   "tls_key": "",
   "auth_enabled": false,

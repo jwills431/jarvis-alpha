@@ -11,6 +11,7 @@ const {
   isLearnModeStartCommand,
   isLearnModeStopCommand,
   isMemoryControlCommand,
+  parseStreamLine,
   resolveSpeechSelection,
   shouldConsiderAutoMemory,
   trimConversationHistory,
@@ -179,3 +180,35 @@ assert.deepStrictEqual(selection.stale, ['rate']);
 selection = resolveSpeechSelection({voices: []}, {voice: 'Daniel', voiceDefault: 'Daniel'});
 assert.strictEqual(selection.voice, null);
 assert.strictEqual(selection.rate, null);
+
+// ---------- parseStreamLine (SSE classification for the tool loop) ----------
+assert.deepStrictEqual(parseStreamLine('data: [DONE]'), {type: 'done'});
+assert.strictEqual(parseStreamLine('event: ping'), null);
+assert.strictEqual(parseStreamLine('data: not json'), null);
+assert.deepStrictEqual(
+  parseStreamLine('data: ' + JSON.stringify({choices: [{delta: {content: 'Hi'}}]})),
+  {type: 'content', content: 'Hi'},
+);
+// A content delta with no content (e.g. a finish-reason-only frame) is ignored.
+assert.deepStrictEqual(
+  parseStreamLine('data: ' + JSON.stringify({choices: [{delta: {}, finish_reason: 'stop'}]})),
+  {type: 'ignore'},
+);
+// Tool events arrive under the jarvis envelope.
+const resultLine = parseStreamLine('data: ' + JSON.stringify({
+  jarvis: {kind: 'tool_result', id: 'c1', name: 'get_time', arguments: {}, status: 'ok', result: {time: '10:00:00'}},
+}));
+assert.strictEqual(resultLine.type, 'tool_result');
+assert.strictEqual(resultLine.event.name, 'get_time');
+const proposalLine = parseStreamLine('data: ' + JSON.stringify({
+  jarvis: {kind: 'tool_proposal', id: 'abc', name: 'set_timer', arguments: {minutes: 5}},
+}));
+assert.strictEqual(proposalLine.type, 'tool_proposal');
+assert.strictEqual(proposalLine.event.id, 'abc');
+// An unknown jarvis kind is ignored, not misrouted.
+assert.deepStrictEqual(
+  parseStreamLine('data: ' + JSON.stringify({jarvis: {kind: 'mystery'}})),
+  {type: 'ignore'},
+);
+
+console.log('tool-loop stream parsing: ok');

@@ -87,6 +87,24 @@ article.assistant::before{content:"JARVIS";color:var(--cyan)}
 article.user{align-self:flex-end;background:rgba(77,216,255,.10);border:1px solid rgba(77,216,255,.3)}
 article.user::before{content:"You"}
 
+/* ---------- tool calls (Stage 0 tool loop) ---------- */
+article.tool-call{align-self:stretch;background:rgba(255,255,255,.03);border:1px solid var(--line);
+  border-left:2px solid var(--muted);font-size:13px}
+article.tool-call::before{content:"Tool";color:var(--muted)}
+article.tool-call.tool-ok{border-left-color:var(--cyan)}
+article.tool-call.tool-error{border-left-color:#ff6b6b}
+article.tool-call.tool-proposal{border-left-color:#ffcc66}
+article.tool-call.decided-approve{border-left-color:var(--cyan);opacity:.8}
+article.tool-call.decided-deny{border-left-color:#ff6b6b;opacity:.8}
+.tool-title{font-weight:600;margin-bottom:4px}
+.tool-detail{margin:0;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:var(--muted);font-size:12px}
+.tool-actions{display:flex;gap:8px;margin-top:8px}
+.tool-actions button{padding:5px 14px;border-radius:6px;border:1px solid var(--line);background:transparent;
+  color:var(--fg);cursor:pointer;font-size:13px}
+.tool-actions button.primary{background:var(--cyan);color:#04121a;border-color:var(--cyan)}
+.tool-actions button:disabled{opacity:.5;cursor:default}
+
 /* ---------- composer ---------- */
 form{border-top:1px solid var(--line);padding-top:13px}
 label{position:absolute;left:-9999px}

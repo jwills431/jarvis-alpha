@@ -61,6 +61,7 @@ const {
   isLearnModeStartCommand,
   isLearnModeStopCommand,
   isMemoryControlCommand,
+  parseStreamLine,
   shouldConsiderAutoMemory,
   trimConversationHistory,
   unsupportedActionResponse,
@@ -153,6 +154,100 @@ function addMessage(role, text = '') {
   messagesEl.appendChild(el);
   messagesEl.scrollTo({top: messagesEl.scrollHeight, behavior: 'smooth'});
   return el;
+}
+
+function formatToolArguments(args) {
+  return args && typeof args === 'object' && Object.keys(args).length
+    ? JSON.stringify(args) : '(no arguments)';
+}
+
+function renderToolResult(event) {
+  // A read-only tool that already ran, or a rejected/failed call. Purely
+  // informational in the transcript; never fed to speech or chat history.
+  const el = document.createElement('article');
+  const ok = event.status === 'ok';
+  el.className = 'tool-call ' + (ok ? 'tool-ok' : 'tool-error');
+  const title = document.createElement('div');
+  title.className = 'tool-title';
+  title.textContent = `${ok ? '✓' : '✕'} Tool · ${event.name}`;
+  const detail = document.createElement('pre');
+  detail.className = 'tool-detail';
+  const outcome = ok ? JSON.stringify(event.result) : `error: ${event.error}`;
+  detail.textContent = `${formatToolArguments(event.arguments)}\n→ ${outcome}`;
+  el.append(title, detail);
+  messagesEl.appendChild(el);
+  messagesEl.scrollTo({top: messagesEl.scrollHeight, behavior: 'smooth'});
+}
+
+function awaitToolDecision(proposal) {
+  // Render the approve/deny card for a side-effecting call and resolve with the
+  // user's choice. Nothing runs on the server until this resolves.
+  return new Promise((resolve) => {
+    const el = document.createElement('article');
+    el.className = 'tool-call tool-proposal';
+    const title = document.createElement('div');
+    title.className = 'tool-title';
+    title.textContent = `Approve action · ${proposal.name}`;
+    const detail = document.createElement('pre');
+    detail.className = 'tool-detail';
+    detail.textContent = formatToolArguments(proposal.arguments);
+    const actions = document.createElement('div');
+    actions.className = 'tool-actions';
+    const approve = document.createElement('button');
+    approve.type = 'button';
+    approve.className = 'primary';
+    approve.textContent = 'Approve';
+    const deny = document.createElement('button');
+    deny.type = 'button';
+    deny.textContent = 'Deny';
+    const decide = (approved) => {
+      approve.disabled = true;
+      deny.disabled = true;
+      el.classList.add(approved ? 'decided-approve' : 'decided-deny');
+      title.textContent = `${approved ? 'Approved' : 'Denied'} · ${proposal.name}`;
+      resolve(approved);
+    };
+    approve.addEventListener('click', () => decide(true));
+    deny.addEventListener('click', () => decide(false));
+    actions.append(approve, deny);
+    el.append(title, detail, actions);
+    messagesEl.appendChild(el);
+    messagesEl.scrollTo({top: messagesEl.scrollHeight, behavior: 'smooth'});
+  });
+}
+
+async function streamAssistant(response, output, speechStream) {
+  // Consume one SSE turn: forward prose to `output` + speech, render tool cards,
+  // and surface a pending proposal. Returns {answer, completed, proposal, sawTool}.
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '', answer = '', completed = false, unsupportedScriptChars = 0;
+  let proposal = null, sawTool = false;
+  while (true) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    const lines = buffer.split('\n'); buffer = lines.pop() || '';
+    for (const line of lines) {
+      const parsed = parseStreamLine(line);
+      if (!parsed) continue;
+      if (parsed.type === 'done') { completed = true; continue; }
+      if (parsed.type === 'tool_result') { sawTool = true; renderToolResult(parsed.event); continue; }
+      if (parsed.type === 'tool_proposal') { sawTool = true; proposal = parsed.event; continue; }
+      if (parsed.type !== 'content') continue;
+      const content = parsed.content;
+      unsupportedScriptChars += countUnsupportedScriptCharacters(content);
+      if (unsupportedScriptChars >= 3) {
+        await reader.cancel();
+        throw new Error('unsupported language generation');
+      }
+      answer += content;
+      output.textContent = answer;
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      feedSpeech(speechStream, content);
+    }
+  }
+  return {answer, completed, proposal, sawTool};
 }
 
 function setLearnMode(enabled, message = '') {
@@ -1724,40 +1819,28 @@ async function submitMessage(value) {
   try {
     const response = await fetch('/api/chat', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({messages: history})});
     if (!response.ok || !response.body) throw new Error('request failed');
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '', answer = '', completed = false, unsupportedScriptChars = 0;
-    while (true) {
-      const {value, done} = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, {stream: true});
-      const lines = buffer.split('\n'); buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (line === 'data: [DONE]') { completed = true; continue; }
-        if (!line.startsWith('data: ')) continue;
-        let data;
-        try { data = JSON.parse(line.slice(6)); }
-        catch { continue; }
-        const content = data.choices?.[0]?.delta?.content || '';
-        unsupportedScriptChars += countUnsupportedScriptCharacters(content);
-        if (unsupportedScriptChars >= 3) {
-          await reader.cancel();
-          throw new Error('unsupported language generation');
-        }
-        answer += content;
-        output.textContent = answer;
-        messagesEl.scrollTop = messagesEl.scrollHeight;
-        feedSpeech(speechStream, content);
-      }
+    let result = await streamAssistant(response, output, speechStream);
+    let sawTool = result.sawTool;
+    // A side-effecting call pauses the turn: get the user's decision, then POST
+    // it and stream the continuation. Loops in case the model proposes again.
+    while (result.proposal) {
+      const approved = await awaitToolDecision(result.proposal);
+      const verb = approved ? 'approve' : 'deny';
+      const contResponse = await fetch(`/api/tools/${result.proposal.id}/${verb}`, {method: 'POST'});
+      if (!contResponse.ok || !contResponse.body) throw new Error('request failed');
+      result = await streamAssistant(contResponse, output, speechStream);
+      sawTool = sawTool || result.sawTool;
     }
-    if (!answer || !completed) throw new Error('incomplete response');
+    if (!result.completed || (!result.answer && !sawTool)) throw new Error('incomplete response');
     feedSpeech(speechStream, '', true);
-    history = trimConversationHistory(
-      [...history, {role: 'assistant', content: answer}],
-      {maxMessages: chatLimits.maxMessages, maxChars: chatLimits.maxChars},
-    );
+    if (result.answer) {
+      history = trimConversationHistory(
+        [...history, {role: 'assistant', content: result.answer}],
+        {maxMessages: chatLimits.maxMessages, maxChars: chatLimits.maxChars},
+      );
+    }
     succeeded = true;
-    if (autoMemoryEligible) scheduleAutoMemory(autoMemoryQuestion, text);
+    if (autoMemoryEligible && result.answer) scheduleAutoMemory(autoMemoryQuestion, text);
   } catch (error) {
     history = previousHistory;
     output.textContent = error.message === 'unsupported language generation'

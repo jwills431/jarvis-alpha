@@ -1,9 +1,20 @@
 # start_jarvis.ps1 - bring up the full JARVIS stack (llama.cpp + app + Fish) in WSL.
 # Run from a PowerShell prompt:  .\start_jarvis.ps1
+#   .\start_jarvis.ps1            normal launch (tools off, unchanged behaviour)
+#   .\start_jarvis.ps1 -Tools     Stage 0 tool loop: starts llama-server with
+#                                 --jinja so native tool-calling works. Also set
+#                                 "tools_enabled": true in config.local.json.
 # (pairs with stop_jarvis.ps1). llama + app come up in seconds; Fish then warms
 # up for ~2 minutes (one-time torch.compile) before spoken replies work.
 
+param([switch]$Tools)
+
 Write-Host "Starting JARVIS stack..." -ForegroundColor Cyan
+if ($Tools) { Write-Host "Tool loop enabled (--jinja). Ensure config.local.json has tools_enabled: true." -ForegroundColor Yellow }
+
+# Enable native tool-calling in the backend only when -Tools is passed. Exported
+# into the bash launcher below so run_backend.sh adds --jinja; default is off.
+$toolsExport = if ($Tools) { "export JARVIS_ENABLE_TOOLS=1`n" } else { "" }
 
 # The whole launcher is a bash script piped into WSL over stdin, which avoids any
 # Windows/WSL quoting pitfalls. Each service is detached with setsid so it keeps
@@ -15,6 +26,7 @@ cd "$PROJ" || exit 1
 export JARVIS_MODEL_PATH=/home/jaydubya/jarvis/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
 export JARVIS_LLAMA_SERVER=/home/jaydubya/jarvis/llama.cpp/build/bin/llama-server
 export JARVIS_GPU_LAYERS=99
+__TOOLS_EXPORT__
 
 # Already running? Do nothing rather than double-launch.
 if curl -sf http://127.0.0.1:8787/api/health > /dev/null 2>&1; then
@@ -52,6 +64,7 @@ sleep 6
 test -f /tmp/jarvis_fish.log && echo "fish launched (warming up ~2 min)" || echo "WARNING: fish log not created"
 '@
 
+$launcher = $launcher -replace '__TOOLS_EXPORT__', $toolsExport
 $launcher | wsl -d Ubuntu bash -l
 
 Write-Host ""

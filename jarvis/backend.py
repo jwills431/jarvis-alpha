@@ -104,6 +104,112 @@ def stream_chat(config: Config, messages: list[dict]) -> Iterable[bytes]:
         raise BackendError("local model request failed") from exc
 
 
+def stream_chat_tools(
+    config: Config,
+    messages: list[dict],
+    tools: list[dict],
+    *,
+    grammar: str | None = None,
+) -> Iterable[dict]:
+    """Stream a tool-aware completion, yielding structured events.
+
+    Talks to llama.cpp's OpenAI-compatible endpoint with a `tools` array and
+    tool_choice="auto" (native tool-calling, requires the server started with
+    --jinja). Content is streamed token by token so the final spoken answer
+    keeps the low-latency TTS path; tool-call deltas are accumulated and parsed.
+
+    Yields dicts, one of:
+      {"type": "content", "text": str}                       # forward to client
+      {"type": "tool_call", "id", "name", "arguments"|None,  # a proposed call
+       "malformed": bool}
+      {"type": "done", "finish_reason": str|None}            # end of this turn
+
+    A grammar, when provided, is passed through for builds that constrain via
+    GBNF rather than native tool-calling; the native path leaves it None.
+    """
+    body: dict = {
+        "model": config.model,
+        "messages": messages,
+        "stream": True,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "tools": tools,
+        "tool_choice": "auto",
+    }
+    if grammar:
+        body["grammar"] = grammar
+    payload = json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(
+        f"{config.llama_base_url}/v1/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json", **_headers()},
+        method="POST",
+    )
+    # Tool-call fragments arrive across many deltas, keyed by their index; each
+    # carries an id, a function name, and a slice of the arguments JSON string.
+    calls: dict[int, dict] = {}
+    finish_reason: str | None = None
+    unsupported_script_chars = 0
+    try:
+        with urllib.request.urlopen(request, timeout=config.request_timeout_seconds) as response:
+            for raw_line in response:
+                if len(raw_line) > 262_144 or not raw_line.startswith(b"data: "):
+                    continue
+                value = raw_line[6:].strip()
+                if value == b"[DONE]":
+                    break
+                try:
+                    event = json.loads(value)
+                    choice = event["choices"][0]
+                except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                # Streaming servers put the incremental payload in `delta`; some
+                # llama.cpp builds emit a single non-streamed `message` frame for
+                # a tool call. Accept either so calls are never missed.
+                delta = choice.get("delta") or choice.get("message") or {}
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    unsupported_script_chars += count_unsupported_script_characters(content)
+                    if unsupported_script_chars >= 3:
+                        raise BackendError("local model generated unsupported non-English text")
+                    yield {"type": "content", "text": content}
+                for fragment in delta.get("tool_calls") or []:
+                    if not isinstance(fragment, dict):
+                        continue
+                    index = fragment.get("index", 0)
+                    slot = calls.setdefault(index, {"id": None, "name": None, "arguments": ""})
+                    if fragment.get("id"):
+                        slot["id"] = fragment["id"]
+                    function = fragment.get("function") or {}
+                    if function.get("name"):
+                        slot["name"] = function["name"]
+                    argument_fragment = function.get("arguments")
+                    if isinstance(argument_fragment, str):
+                        slot["arguments"] += argument_fragment
+                if choice.get("finish_reason"):
+                    finish_reason = choice["finish_reason"]
+    except (OSError, urllib.error.HTTPError) as exc:
+        raise BackendError("local model request failed") from exc
+    for _, slot in sorted(calls.items()):
+        raw_arguments = slot["arguments"].strip()
+        parsed: object = {}
+        malformed = False
+        if raw_arguments:
+            try:
+                parsed = json.loads(raw_arguments)
+            except (ValueError, json.JSONDecodeError):
+                parsed = None
+                malformed = True
+        yield {
+            "type": "tool_call",
+            "id": slot["id"],
+            "name": slot["name"],
+            "arguments": parsed,
+            "malformed": malformed,
+        }
+    yield {"type": "done", "finish_reason": finish_reason}
+
+
 def complete_chat(
     config: Config,
     messages: list[dict],

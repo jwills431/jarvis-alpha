@@ -99,6 +99,35 @@ class ConfigTests(unittest.TestCase):
     def test_defaults_to_say_engine(self):
         self.assertEqual(Config().validate().tts_engine, "say")
 
+    def test_tools_disabled_by_default(self):
+        config = Config().validate()
+        self.assertFalse(config.tools_enabled)
+        self.assertFalse(config.tool_grammar_enabled)
+
+    def test_tools_enabled_config_validates(self):
+        config = Config(tools_enabled=True, tool_grammar_enabled=True,
+                        tool_max_iterations=4, tool_call_timeout_seconds=10).validate()
+        self.assertTrue(config.tools_enabled)
+        self.assertEqual(config.tool_max_iterations, 4)
+
+    def test_rejects_out_of_range_tool_iterations(self):
+        with self.assertRaises(ValueError):
+            Config(tool_max_iterations=0).validate()
+        with self.assertRaises(ValueError):
+            Config(tool_max_iterations=99).validate()
+
+    def test_rejects_tool_audit_path_outside_data(self):
+        with self.assertRaises(ValueError):
+            Config(tool_audit_path="/etc/passwd").validate()
+        with self.assertRaises(ValueError):
+            Config(tool_audit_path="logs/audit.jsonl").validate()
+
+    def test_prepare_model_messages_injects_tool_guidance_only_when_active(self):
+        base = prepare_model_messages([{"role": "user", "content": "hi"}])
+        withtools = prepare_model_messages([{"role": "user", "content": "hi"}], tools_active=True)
+        self.assertNotIn("Tool use is now enabled", base[0]["content"])
+        self.assertIn("Tool use is now enabled", withtools[0]["content"])
+
     def test_rejects_unknown_tts_engine(self):
         with self.assertRaises(ValueError):
             Config(tts_engine="cloud").validate()

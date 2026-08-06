@@ -12,4 +12,9 @@ if [ ! -f "$KEY_FILE" ]; then
   umask 077
   openssl rand -hex 32 > "$KEY_FILE"
 fi
-exec "$SERVER" --model "$MODEL" --host 127.0.0.1 --port 8081 --ctx-size 4096 --parallel 1 --threads 10 --n-gpu-layers "$GPU_LAYERS" --cache-reuse "$CACHE_REUSE" --no-webui --api-key-file "$KEY_FILE" --cors-origins http://127.0.0.1:8787
+# Native tool-calling (Stage 0 tool loop) needs --jinja so llama.cpp applies the
+# model's own chat template and parses tool calls. Opt-in: set JARVIS_ENABLE_TOOLS=1
+# when running with config "tools_enabled": true. Default is unchanged.
+JINJA=""
+if [ "${JARVIS_ENABLE_TOOLS:-0}" = "1" ]; then JINJA="--jinja"; fi
+exec "$SERVER" --model "$MODEL" --host 127.0.0.1 --port 8081 --ctx-size 4096 --parallel 1 --threads 10 --n-gpu-layers "$GPU_LAYERS" --cache-reuse "$CACHE_REUSE" --no-webui --api-key-file "$KEY_FILE" --cors-origins http://127.0.0.1:8787 $JINJA

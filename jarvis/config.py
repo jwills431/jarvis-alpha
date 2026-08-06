@@ -62,6 +62,28 @@ class Config:
     memory_context_chars: int = 6_000
     max_tokens: int = 512
     temperature: float = 0.6
+    # --- Tool loop (Stage 0 of the capabilities plan) ---
+    # Off by default: with tools disabled the chat endpoint behaves exactly as
+    # before (direct llama.cpp SSE passthrough), so existing behaviour and every
+    # prior test are unchanged until this is explicitly turned on. When enabled,
+    # /api/chat runs the server-side propose->validate->execute->feed-back loop.
+    tools_enabled: bool = False
+    # Hybrid grammar mode. The primary path is llama.cpp's native tool-calling
+    # (server started with --jinja), which constrains and returns tool_calls; our
+    # own schema validation is the guarantee that a malformed call never runs. If
+    # a build's native tool-calling misbehaves, set this true to *also* send a
+    # GBNF grammar generated from the tool schemas. Off by default because some
+    # builds reject a custom grammar alongside jinja tools.
+    tool_grammar_enabled: bool = False
+    # Hard cap on model<->tool round trips within a single turn, so the loop can
+    # never spin. Each iteration is one model completion that may call tools.
+    tool_max_iterations: int = 6
+    # Per-call wall-clock budget for a tool handler, in seconds.
+    tool_call_timeout_seconds: int = 20
+    # On-disk audit log of tool activity (append-only JSONL), separate from chat.
+    # Relative path under the project root; every proposal, execution, approval,
+    # denial, and failure is recorded with a timestamp.
+    tool_audit_path: str = "data/tool_audit.jsonl"
     # --- Server-ify (private-LAN hosting): TLS, auth, LAN bind, playback ---
     # TLS is active when both a certificate and its private key are configured.
     # Paths may be absolute (the server runs from the Linux fs) or relative to
@@ -184,6 +206,18 @@ class Config:
             raise ValueError("max_tts_chars must be between 100 and 16000")
         if not 0 <= self.temperature <= 2:
             raise ValueError("temperature must be between 0 and 2")
+        # --- Tool loop ---
+        if type(self.tools_enabled) is not bool:
+            raise ValueError("tools_enabled must be a boolean")
+        if type(self.tool_grammar_enabled) is not bool:
+            raise ValueError("tool_grammar_enabled must be a boolean")
+        if not 1 <= self.tool_max_iterations <= 20:
+            raise ValueError("tool_max_iterations must be between 1 and 20")
+        if not 1 <= self.tool_call_timeout_seconds <= 120:
+            raise ValueError("tool_call_timeout_seconds must be between 1 and 120")
+        audit_path = Path(self.tool_audit_path)
+        if audit_path.is_absolute() or ".." in audit_path.parts or not audit_path.parts or audit_path.parts[0] != "data":
+            raise ValueError("tool_audit_path must be a relative path under data")
         # TLS: certificate and key are all-or-nothing. Paths may be absolute or
         # relative; reject control characters but do not require the files to
         # exist at validation time (they are read when the socket is wrapped).

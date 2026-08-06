@@ -96,6 +96,28 @@
     return durableQuestion || durablePattern || (text.length >= 24 && !looksLikeRequest);
   }
 
+  function parseStreamLine(line) {
+    // Classify one SSE line from /api/chat (or a tool resume). Content keeps the
+    // OpenAI delta shape so streaming + TTS are unchanged; tool activity arrives
+    // under a top-level `jarvis` envelope. Returns null for a non-data line and
+    // {type:'ignore'} for a data line carrying nothing we act on.
+    if (typeof line !== 'string') return null;
+    if (line === 'data: [DONE]') return {type: 'done'};
+    if (!line.startsWith('data: ')) return null;
+    let data;
+    try { data = JSON.parse(line.slice(6)); } catch { return null; }
+    if (data && typeof data.jarvis === 'object' && data.jarvis) {
+      const event = data.jarvis;
+      if (event.kind === 'tool_result') return {type: 'tool_result', event};
+      if (event.kind === 'tool_proposal') return {type: 'tool_proposal', event};
+      return {type: 'ignore'};
+    }
+    const content = data && data.choices && data.choices[0] && data.choices[0].delta
+      ? data.choices[0].delta.content : undefined;
+    if (typeof content === 'string') return {type: 'content', content};
+    return {type: 'ignore'};
+  }
+
   function countUnsupportedScriptCharacters(value) {
     if (typeof value !== 'string') return 0;
     return (value.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Cyrillic}\p{Script=Arabic}]/gu) || []).length;
@@ -199,6 +221,7 @@
     isLearnModeStartCommand,
     isLearnModeStopCommand,
     isMemoryControlCommand,
+    parseStreamLine,
     resolveSpeechSelection,
     shouldConsiderAutoMemory,
     trimConversationHistory,
