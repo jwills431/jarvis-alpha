@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from . import timers as timers_module
 from .config import Config
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -377,8 +378,168 @@ GET_TIME = Tool(
 )
 
 
+def _humanize_seconds(total: int) -> str:
+    total = int(total)
+    if total < 60:
+        return f"{total} second{'s' if total != 1 else ''}"
+    parts = []
+    for count, unit in ((total // 3600, "hour"), ((total % 3600) // 60, "minute")):
+        if count:
+            parts.append(f"{count} {unit}{'s' if count != 1 else ''}")
+    return " ".join(parts) if parts else "less than a minute"
+
+
+def _set_timer(arguments: dict, config: Config) -> dict:
+    store = timers_module.TimerStore(config)
+    try:
+        record = store.add_timer(arguments["duration_seconds"], arguments.get("label"))
+    except timers_module.TimerError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+    return {
+        "status": "set",
+        "id": record["id"],
+        "kind": "timer",
+        "label": record["label"],
+        "duration": _humanize_seconds(arguments["duration_seconds"]),
+        "fires_at": record["fire_at_spoken"],
+    }
+
+
+def _set_reminder(arguments: dict, config: Config) -> dict:
+    store = timers_module.TimerStore(config)
+    try:
+        record = store.add_reminder(
+            arguments.get("message"),
+            duration_seconds=arguments.get("duration_seconds"),
+            fire_at=arguments.get("fire_at"),
+            at_time=arguments.get("at_time"),
+        )
+    except timers_module.TimerError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+    return {
+        "status": "set",
+        "id": record["id"],
+        "kind": "reminder",
+        "message": record["label"],
+        "fires_at": record["fire_at_spoken"],
+    }
+
+
+def _list_timers(arguments: dict, config: Config) -> dict:
+    store = timers_module.TimerStore(config)
+    try:
+        pending = store.list_pending()
+    except timers_module.TimerError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+    return {
+        "count": len(pending),
+        "timers": [
+            {"id": t["id"], "kind": t["kind"], "label": t["label"], "fires_at": t["fire_at_spoken"]}
+            for t in pending
+        ],
+    }
+
+
+def _cancel_timer(arguments: dict, config: Config) -> dict:
+    store = timers_module.TimerStore(config)
+    try:
+        cancelled = store.cancel(timer_id=arguments.get("id"), label=arguments.get("label"))
+    except timers_module.TimerNotFound as exc:
+        raise ToolExecutionError(str(exc)) from exc
+    except timers_module.TimerError as exc:
+        raise ToolExecutionError(str(exc)) from exc
+    return {
+        "status": "cancelled",
+        "count": len(cancelled),
+        "cancelled": [{"id": t["id"], "kind": t["kind"], "label": t["label"]} for t in cancelled],
+    }
+
+
+SET_TIMER = Tool(
+    name="set_timer",
+    description=(
+        "Start a plain countdown timer for a relative duration. duration_seconds "
+        "is the countdown length in seconds (e.g. 600 for ten minutes, 1800 for "
+        "half an hour). Optional label describes what it is for. Use ONLY for a "
+        "bare countdown like 'set a timer for 10 minutes'. If the user wants to be "
+        "reminded to DO something, or names a message/task, use set_reminder "
+        "instead. Executes immediately; no confirmation needed."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 31_536_000,
+                                 "description": "Countdown length in seconds."},
+            "label": {"type": "string", "description": "Optional short description of the timer."},
+        },
+        "required": ["duration_seconds"],
+    },
+    handler=_set_timer,
+    side_effects=False,
+)
+
+SET_REMINDER = Tool(
+    name="set_reminder",
+    description=(
+        "Schedule a reminder or alarm that alerts at a later time. Use this "
+        "whenever the user says 'remind me' or 'set a reminder'. If the user says "
+        "WHAT to be reminded about (e.g. 'remind me to check the oven'), you MUST "
+        "pass that as message — never drop it. Omit message ONLY for a bare alarm "
+        "with no stated task ('set a reminder for 10:42 PM'). Give the time as "
+        "EXACTLY ONE of: at_time (a clock time exactly as the user said it, e.g. "
+        "'10:42 PM', '22:42', '6:30am' — resolved to its next occurrence; you do "
+        "NOT need get_time for this), duration_seconds (relative, e.g. 600 for ten "
+        "minutes), or fire_at (an absolute ISO datetime). Examples: 'set a reminder "
+        "for 10:42 PM' -> at_time='10:42 PM'; 'remind me to check the oven at 6pm' "
+        "-> message='check the oven', at_time='6pm'; 'remind me in 10 minutes to "
+        "stretch' -> message='stretch', duration_seconds=600."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "message": {"type": "string", "description": "Optional: what to remind the user about."},
+            "at_time": {"type": "string",
+                        "description": "A clock time as spoken, e.g. '10:42 PM' or '22:42'. Next occurrence."},
+            "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 31_536_000,
+                                 "description": "Relative delay in seconds."},
+            "fire_at": {"type": "string", "description": "Absolute local ISO datetime."},
+        },
+        "required": [],
+    },
+    handler=_set_reminder,
+    side_effects=False,
+)
+
+LIST_TIMERS = Tool(
+    name="list_timers",
+    description="List the pending timers and reminders and when they will fire. Read-only.",
+    parameters={"type": "object", "properties": {}, "required": []},
+    handler=_list_timers,
+    side_effects=False,
+)
+
+CANCEL_TIMER = Tool(
+    name="cancel_timer",
+    description=(
+        "Cancel a pending timer or reminder. Provide its id (from list_timers) or "
+        "its label/message text. Use for 'cancel my timer' or 'cancel the oven reminder'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "description": "The timer id to cancel."},
+            "label": {"type": "string", "description": "Cancel pending timers whose label/message matches this."},
+        },
+        "required": [],
+    },
+    handler=_cancel_timer,
+    side_effects=False,
+)
+
+
 def default_registry() -> ToolRegistry:
-    """The tools JARVIS ships with at this stage. Stage 0: get_time only."""
+    """The tools JARVIS ships with. Stage 0: get_time. Stage 1: timers/reminders."""
     registry = ToolRegistry()
-    registry.register(GET_TIME)
+    for tool in (GET_TIME, SET_TIMER, SET_REMINDER, LIST_TIMERS, CANCEL_TIMER):
+        registry.register(tool)
     return registry

@@ -76,16 +76,18 @@ article{
   border-radius:0;
   clip-path:polygon(11px 0,100% 0,100% calc(100% - 11px),calc(100% - 11px) 100%,0 100%,0 11px);
 }
-/* Speaker tags are generated, so app.js keeps writing plain text nodes. */
-article::before{
-  display:block;font-family:var(--mono);font-size:.57rem;letter-spacing:.2em;
-  text-transform:uppercase;color:var(--muted);margin-bottom:6px;
+/* Speaker tag + timestamp header. app.js writes the message text into .msg-body. */
+.msg-meta{
+  display:flex;align-items:baseline;gap:8px;margin-bottom:6px;
+  font-family:var(--mono);font-size:.57rem;letter-spacing:.2em;text-transform:uppercase;
 }
+.msg-name{color:var(--muted)}
+.msg-time{color:var(--muted);opacity:.65;letter-spacing:.08em}
+.msg-body{white-space:pre-wrap}
 article.assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--line);
   border-left:2px solid var(--cyan)}
-article.assistant::before{content:"JARVIS";color:var(--cyan)}
+article.assistant .msg-name{color:var(--cyan)}
 article.user{align-self:flex-end;background:rgba(77,216,255,.10);border:1px solid rgba(77,216,255,.3)}
-article.user::before{content:"You"}
 
 /* ---------- tool calls (Stage 0 tool loop) ---------- */
 article.tool-call{align-self:stretch;background:rgba(255,255,255,.03);border:1px solid var(--line);
@@ -104,6 +106,11 @@ article.tool-call.decided-deny{border-left-color:#ff6b6b;opacity:.8}
   color:var(--fg);cursor:pointer;font-size:13px}
 .tool-actions button.primary{background:var(--cyan);color:#04121a;border-color:var(--cyan)}
 .tool-actions button:disabled{opacity:.5;cursor:default}
+
+/* ---------- fired timer / reminder alert ---------- */
+article.timer-alert{align-self:stretch;background:rgba(255,204,102,.10);border:1px solid rgba(255,204,102,.35);
+  border-left:2px solid #ffcc66;font-weight:600}
+article.timer-alert::before{content:"Alert";color:#ffcc66}
 
 /* ---------- composer ---------- */
 form{border-top:1px solid var(--line);padding-top:13px}

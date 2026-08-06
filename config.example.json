@@ -52,6 +52,9 @@
   "tool_max_iterations": 6,
   "tool_call_timeout_seconds": 20,
   "tool_audit_path": "data/tool_audit.jsonl",
+  "timers_path": "data/timers.json",
+  "max_timers": 50,
+  "max_timer_seconds": 604800,
 
   "tls_cert": "",
   "tls_key": "",

@@ -143,6 +143,8 @@ def _run_handler(tool, arguments: dict, config: Config) -> object:
         return future.result(timeout=config.tool_call_timeout_seconds)
     except FutureTimeout:
         raise ToolExecutionError(f"{tool.name} timed out") from None
+    except ToolExecutionError:
+        raise  # a handler-reported error already has a clean message
     except Exception as exc:  # a handler bug must not crash the turn
         raise ToolExecutionError(f"{tool.name} failed: {exc}") from exc
 

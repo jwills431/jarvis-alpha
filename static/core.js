@@ -96,6 +96,31 @@
     return durableQuestion || durablePattern || (text.length >= 24 && !looksLikeRequest);
   }
 
+  function formatMessageTimestamp(value) {
+    // e.g. "10:30 PM · 8/5/2026". Manual formatting (not toLocaleString) so it
+    // is deterministic and unit-testable regardless of the host locale.
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    let hour = date.getHours();
+    const minute = String(date.getMinutes()).padStart(2, '0');
+    const meridiem = hour >= 12 ? 'PM' : 'AM';
+    hour = hour % 12 || 12;
+    const stamp = `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`;
+    return `${hour}:${minute} ${meridiem} · ${stamp}`;
+  }
+
+  function formatTimerAlert(fired) {
+    // Spoken/displayed text for a fired timer or reminder. Avoids "timer timer"
+    // when the user's own label already contains the word "timer" or "alarm".
+    if (!fired || typeof fired !== 'object') return 'Your timer is up.';
+    const label = typeof fired.label === 'string' ? fired.label.trim() : '';
+    if (fired.kind === 'reminder') {
+      return label ? `Reminder: ${label}` : 'This is your reminder.';
+    }
+    if (!label) return 'Your timer is up.';
+    return /\b(?:timer|alarm)\b/i.test(label) ? `Your ${label} is up.` : `Your ${label} timer is up.`;
+  }
+
   function parseStreamLine(line) {
     // Classify one SSE line from /api/chat (or a tool resume). Content keeps the
     // OpenAI delta shape so streaming + TTS are unchanged; tool activity arrives
@@ -217,6 +242,8 @@
     countUnsupportedScriptCharacters,
     formatConversationTranscript,
     formatLearnMemory,
+    formatMessageTimestamp,
+    formatTimerAlert,
     isLearnModeInterviewRequest,
     isLearnModeStartCommand,
     isLearnModeStopCommand,

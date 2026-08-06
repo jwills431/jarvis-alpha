@@ -317,6 +317,26 @@ def test_resume_with_unknown_id_is_graceful(tmp_path, monkeypatch):
     assert not events
 
 
+def test_set_timer_through_the_loop_persists(tmp_path, monkeypatch):
+    from jarvis.timers import TimerStore
+    config = Config(tools_enabled=True, tool_audit_path=str(tmp_path / "a.jsonl"),
+                    timers_path=str(tmp_path / "t.json"))
+    script_backend(monkeypatch, [
+        [tool_call("set_timer", {"duration_seconds": 600, "label": "tea"}), done("tool_calls")],
+        [content("Timer set for ten minutes."), done("stop")],
+    ])
+    text, events, terminated = collect(
+        agent.run(config, default_registry(), MESSAGES, agent.PendingActions())
+    )
+    assert terminated
+    results = [e for e in events if e["kind"] == "tool_result"]
+    assert results and results[0]["status"] == "ok"
+    assert results[0]["name"] == "set_timer"
+    assert text == "Timer set for ten minutes."
+    # The side-effecting tool ran inline (auto-run decision) and persisted.
+    assert len(TimerStore(config).list_pending()) == 1
+
+
 def test_pending_actions_evicts_and_expires():
     store = agent.PendingActions(max_items=2, ttl_seconds=900)
     a = store.put({"index": 0})

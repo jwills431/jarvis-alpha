@@ -122,6 +122,24 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Config(tool_audit_path="logs/audit.jsonl").validate()
 
+    def test_timer_defaults_and_validation(self):
+        config = Config().validate()
+        self.assertEqual(config.timers_path, "data/timers.json")
+        self.assertEqual(config.max_timers, 50)
+        with self.assertRaises(ValueError):
+            Config(timers_path="/tmp/timers.json").validate()
+        with self.assertRaises(ValueError):
+            Config(timers_path="logs/timers.json").validate()
+        with self.assertRaises(ValueError):
+            Config(max_timers=0).validate()
+        with self.assertRaises(ValueError):
+            Config(max_timer_seconds=10).validate()
+
+    def test_tool_guidance_overrides_the_timer_refusal(self):
+        withtools = prepare_model_messages([{"role": "user", "content": "hi"}], tools_active=True)
+        self.assertIn("set_timer", withtools[0]["content"])
+        self.assertIn("disregard any earlier statement", withtools[0]["content"])
+
     def test_prepare_model_messages_injects_tool_guidance_only_when_active(self):
         base = prepare_model_messages([{"role": "user", "content": "hi"}])
         withtools = prepare_model_messages([{"role": "user", "content": "hi"}], tools_active=True)

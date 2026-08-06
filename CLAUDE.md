@@ -55,9 +55,21 @@ implemented and verified on-device 2026-08-05.** It is gated behind
 cards. 186 tests green (Python + node), none needing the GPU. Run the tool loop
 with llama-server on `--jinja` (`.\start_jarvis.ps1 -Tools`) and
 `tools_enabled: true`; iterate on app/tool code with `.\restart_app.ps1` (no Fish
-re-warm). **Next: Stage 1 (clock/timers/reminders) — the first real
-side-effecting tools, which exercise the confirmation gate.** Full detail and the
-on-device checklist: `docs/STAGE0_TOOL_LOOP.md`.
+re-warm). Full detail: `docs/STAGE0_TOOL_LOOP.md`.
+
+**Stage 1 (clock/timers/reminders) is DONE — verified on-device 2026-08-05.**
+Adds `set_timer`, `set_reminder`, `list_timers`, `cancel_timer` to the registry; a
+file-backed `jarvis/timers.py` `TimerStore` (`data/timers.json`); `GET /api/timers`
+(poll → atomically fire due timers → return once); and browser polling (~4 s) that
+renders an ⏰ alert card and speaks it. Decisions: timers **auto-run** (not gated —
+a deliberate timers-only deviation), and **relative + absolute** times both work.
+`set_reminder` takes `at_time` (a clock string the server resolves to the next
+occurrence) with an optional message — this was the key reliability fix; the model
+would otherwise fall back to `set_timer` rather than compute an ISO time. No
+scheduler thread — firing is wall-clock at poll time, so a pending timer survives a
+restart for free. Iterate on app code with `.\restart_app.ps1` (ships its launcher
+to WSL as base64 to dodge PowerShell/CRLF issues). 212 tests green. **Next: Stage 2
+(reading the web — the first egress, prompt-injection defence).**
 
 ## The dedicated server (this machine)
 
@@ -113,6 +125,7 @@ on-device checklist: `docs/STAGE0_TOOL_LOOP.md`.
 
 - `docs/CAPABILITIES_PLAN.md` — staged plan for giving JARVIS the ability to act.
 - `docs/STAGE0_TOOL_LOOP.md` — Stage 0 tool-loop design + on-device checklist.
+- `docs/STAGE1_TIMERS.md` — Stage 1 timers/reminders design + on-device checklist.
 - `docs/SERVER_BUILD_PROGRESS.md` — newest, authoritative server resume note.
 - `docs/HANDOFF.md` — Mac-side voice-engine work + the architecture fork.
 - `docs/JARVIS_SERVER_PLAN.md`, `docs/PC_FISH_SESSION.md` — server plan + Fish setup.

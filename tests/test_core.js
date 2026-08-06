@@ -11,6 +11,8 @@ const {
   isLearnModeStartCommand,
   isLearnModeStopCommand,
   isMemoryControlCommand,
+  formatMessageTimestamp,
+  formatTimerAlert,
   parseStreamLine,
   resolveSpeechSelection,
   shouldConsiderAutoMemory,
@@ -212,3 +214,21 @@ assert.deepStrictEqual(
 );
 
 console.log('tool-loop stream parsing: ok');
+
+// ---------- formatTimerAlert (no "timer timer" duplication) ----------
+assert.strictEqual(formatTimerAlert({kind: 'timer', label: 'tea'}), 'Your tea timer is up.');
+assert.strictEqual(formatTimerAlert({kind: 'timer', label: 'one minute timer'}), 'Your one minute timer is up.');
+assert.strictEqual(formatTimerAlert({kind: 'timer', label: 'kitchen alarm'}), 'Your kitchen alarm is up.');
+assert.strictEqual(formatTimerAlert({kind: 'timer', label: ''}), 'Your timer is up.');
+assert.strictEqual(formatTimerAlert({kind: 'timer'}), 'Your timer is up.');
+assert.strictEqual(formatTimerAlert({kind: 'reminder', label: 'check the oven'}), 'Reminder: check the oven');
+assert.strictEqual(formatTimerAlert({kind: 'reminder', label: ''}), 'This is your reminder.');
+console.log('timer alert formatting: ok');
+
+// ---------- formatMessageTimestamp (deterministic, locale-independent) ----------
+assert.strictEqual(formatMessageTimestamp(new Date(2026, 7, 5, 22, 30)), '10:30 PM · 8/5/2026');
+assert.strictEqual(formatMessageTimestamp(new Date(2026, 0, 9, 9, 5)), '9:05 AM · 1/9/2026');
+assert.strictEqual(formatMessageTimestamp(new Date(2026, 7, 5, 0, 0)), '12:00 AM · 8/5/2026');
+assert.strictEqual(formatMessageTimestamp(new Date(2026, 7, 5, 12, 0)), '12:00 PM · 8/5/2026');
+assert.strictEqual(formatMessageTimestamp('not a date'), '');
+console.log('message timestamp formatting: ok');

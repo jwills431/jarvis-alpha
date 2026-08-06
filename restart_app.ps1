@@ -36,7 +36,12 @@ done
 curl -sk https://127.0.0.1:8787/api/health > /dev/null 2>&1 || { echo "ERROR: app did not come up; last log lines:"; tail -12 /tmp/jarvis_app.log; exit 1; }
 '@
 
-$launcher | wsl -d Ubuntu bash -l
+# PowerShell re-adds CRLF when piping a string into a native process, and bash
+# then chokes on the carriage returns ($'\r': command not found; unterminated
+# brace groups). Sidestep line endings and quoting entirely: send the script as
+# base64 and decode + run it inside the VM, so only clean LF bytes reach bash.
+$encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($launcher.Replace("`r", "")))
+wsl -d Ubuntu bash -lc "echo $encoded | base64 -d | bash"
 if ($LASTEXITCODE -ne 0) {
   Write-Host "App restart failed - see the log tail above." -ForegroundColor Yellow
   return

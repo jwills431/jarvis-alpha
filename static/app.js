@@ -61,6 +61,8 @@ const {
   isLearnModeStartCommand,
   isLearnModeStopCommand,
   isMemoryControlCommand,
+  formatMessageTimestamp,
+  formatTimerAlert,
   parseStreamLine,
   shouldConsiderAutoMemory,
   trimConversationHistory,
@@ -73,6 +75,11 @@ let releaseRequested = false;
 let voiceReady = false;
 let speechReady = false;
 let speechEnabled = true;
+// Stage 1 timers: whether the server has the tool loop on, and the poll handle
+// for the browser's timer-firing loop (the server owns the clock; we poll it).
+let toolsEnabled = false;
+let timerPollHandle = null;
+let timerPollInFlight = false;
 let speechActive = false;
 let speechRequestId = 0;
 // Two chains so rendering can run ahead of playback (browser mode). speechQueue
@@ -150,10 +157,26 @@ function focusPrompt() {
 function addMessage(role, text = '') {
   const el = document.createElement('article');
   el.className = role;
-  el.textContent = text;
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  const name = document.createElement('span');
+  name.className = 'msg-name';
+  name.textContent = role === 'user' ? 'You' : 'JARVIS';
+  const now = new Date();
+  const time = document.createElement('time');
+  time.className = 'msg-time';
+  time.dateTime = now.toISOString();
+  time.textContent = formatMessageTimestamp(now);
+  meta.append(name, time);
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+  body.textContent = text;
+  el.append(meta, body);
   messagesEl.appendChild(el);
   messagesEl.scrollTo({top: messagesEl.scrollHeight, behavior: 'smooth'});
-  return el;
+  // Return the body: callers keep writing plain text (streaming, errors) and the
+  // meta header (name + timestamp) is preserved.
+  return body;
 }
 
 function formatToolArguments(args) {
@@ -967,6 +990,55 @@ async function previewSpeechSettings() {
   }
 }
 
+function renderFiredTimerCard(fired) {
+  const el = document.createElement('article');
+  el.className = 'timer-alert';
+  el.textContent = `⏰ ${formatTimerAlert(fired)}`;
+  messagesEl.appendChild(el);
+  messagesEl.scrollTo({top: messagesEl.scrollHeight, behavior: 'smooth'});
+}
+
+function speakFiredTimers(list) {
+  // One combined utterance so several timers firing on the same poll don't
+  // cancel each other (each queueSpeech call is authoritative for its id).
+  if (!speechEnabled || !speechReady) return;
+  const spoken = list.map(formatTimerAlert).join(' ');
+  const requestId = ++speechRequestId;
+  speechQueue = Promise.resolve();
+  speechRenderChain = Promise.resolve();
+  queueSpeech(spoken, requestId, 'JARVIS is announcing a timer.');
+}
+
+async function pollTimers() {
+  if (timerPollInFlight) return;
+  timerPollInFlight = true;
+  try {
+    const response = await fetch('/api/timers', {cache: 'no-store'});
+    if (!response.ok) return;
+    const data = await response.json();
+    if (Array.isArray(data.fired) && data.fired.length) {
+      data.fired.forEach(renderFiredTimerCard);
+      speakFiredTimers(data.fired);
+    }
+  } catch {
+    // Transient (e.g. app briefly down); the next tick retries.
+  } finally {
+    timerPollInFlight = false;
+  }
+}
+
+function startTimerPolling() {
+  if (timerPollHandle !== null) return;
+  timerPollHandle = setInterval(() => { void pollTimers(); }, 4000);
+  void pollTimers();
+}
+
+function stopTimerPolling() {
+  if (timerPollHandle === null) return;
+  clearInterval(timerPollHandle);
+  timerPollHandle = null;
+}
+
 async function checkHealth() {
   try {
     const response = await fetch('/api/health', {cache: 'no-store'});
@@ -1006,6 +1078,8 @@ async function checkHealth() {
     else if (speechActive) speechHintEl.textContent = playbackMode === 'browser' ? 'JARVIS is speaking on this device.' : 'JARVIS is speaking locally.';
     else speechHintEl.textContent = speechIdleMessage();
     if (!speechReady && !speechSettingsBackdropEl.hidden) closeSpeechSettings();
+    toolsEnabled = response.ok && state.tools === 'ready';
+    if (toolsEnabled) startTimerPolling(); else stopTimerPolling();
     memoryReady = response.ok && state.memory === 'ready';
     autoMemoryAvailable = memoryReady && state.auto_memory === 'ready';
     if (!autoMemoryInitialized) {
@@ -1794,7 +1868,9 @@ async function submitMessage(value) {
   if (interviewRequest && !learnModeEnabled) {
     setLearnMode(true, 'Learn mode is on for this interview. Each answer will be saved with JARVIS’s preceding question and remain reviewable in Memory.');
   }
-  const localResponse = unsupportedActionResponse(text);
+  // Only refuse timers/reminders locally when the tool loop is off. With tools
+  // enabled JARVIS can actually set them, so let the request reach the model.
+  const localResponse = toolsEnabled ? null : unsupportedActionResponse(text);
   if (localResponse) {
     return deliverLocalResponse(text, localResponse, 'JARVIS is explaining a current capability limit.');
   }
@@ -1868,9 +1944,11 @@ form.addEventListener('submit', async (event) => {
 });
 
 copyChatEl.addEventListener('click', async () => {
-  const messages = Array.from(messagesEl.querySelectorAll('article')).map((item) => ({
+  // Only real conversation turns (not tool/alert cards), and only the body text
+  // (not the name/timestamp meta header).
+  const messages = Array.from(messagesEl.querySelectorAll('article.user, article.assistant')).map((item) => ({
     role: item.classList.contains('user') ? 'user' : 'assistant',
-    content: item.textContent || '',
+    content: (item.querySelector('.msg-body') || item).textContent || '',
   }));
   const transcript = formatConversationTranscript(messages);
   if (!transcript) {

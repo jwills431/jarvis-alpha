@@ -84,6 +84,14 @@ class Config:
     # Relative path under the project root; every proposal, execution, approval,
     # denial, and failure is recorded with a timestamp.
     tool_audit_path: str = "data/tool_audit.jsonl"
+    # --- Stage 1 timers/reminders ---
+    # Persisted so a pending timer survives an app restart. Firing is computed
+    # from the wall clock on each client poll, so no background thread is needed.
+    timers_path: str = "data/timers.json"
+    max_timers: int = 50
+    # Longest horizon a timer/reminder may be set for (default 7 days), bounding
+    # both a relative duration and an absolute fire time.
+    max_timer_seconds: int = 604_800
     # --- Server-ify (private-LAN hosting): TLS, auth, LAN bind, playback ---
     # TLS is active when both a certificate and its private key are configured.
     # Paths may be absolute (the server runs from the Linux fs) or relative to
@@ -218,6 +226,13 @@ class Config:
         audit_path = Path(self.tool_audit_path)
         if audit_path.is_absolute() or ".." in audit_path.parts or not audit_path.parts or audit_path.parts[0] != "data":
             raise ValueError("tool_audit_path must be a relative path under data")
+        timers_path = Path(self.timers_path)
+        if timers_path.is_absolute() or ".." in timers_path.parts or not timers_path.parts or timers_path.parts[0] != "data":
+            raise ValueError("timers_path must be a relative path under data")
+        if not 1 <= self.max_timers <= 500:
+            raise ValueError("max_timers must be between 1 and 500")
+        if not 60 <= self.max_timer_seconds <= 31_536_000:
+            raise ValueError("max_timer_seconds must be between 60 and 31536000")
         # TLS: certificate and key are all-or-nothing. Paths may be absolute or
         # relative; reject control characters but do not require the files to
         # exist at validation time (they are read when the socket is wrapped).
