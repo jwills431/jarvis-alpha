@@ -20,6 +20,11 @@ const {
   resolveSpeechSelection,
   shouldConsiderAutoMemory,
   shouldReleaseAlerts,
+  speechBoundary,
+  speechChunkMinChars,
+  SPEECH_CHUNK_RAMP,
+  SPEECH_MIN_CHARS,
+  SPEECH_MAX_CHARS,
   trimConversationHistory,
   unsupportedActionResponse,
 } = globalThis.JarvisCore;
@@ -292,3 +297,44 @@ assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 1000, 500), true);
 // A malformed entry must not strand the queue forever.
 assert.strictEqual(shouldReleaseAlerts([{fired: {id: 'x'}}], true, t0), true);
 console.log('fired-alert queue: ok');
+
+// ---------- speech chunking (first word fast, then ramp up to build buffer) ----------
+// Fish does not stream within a request, so the first chunk alone decides how long
+// the wait for the first word is. The ramp must start small and grow.
+assert.deepStrictEqual(SPEECH_CHUNK_RAMP, [30, 60, 120]);
+assert.strictEqual(speechChunkMinChars(0), 30);
+assert.strictEqual(speechChunkMinChars(1), 60);
+assert.strictEqual(speechChunkMinChars(2), 120);
+assert.strictEqual(speechChunkMinChars(3), SPEECH_MIN_CHARS);   // settles at steady state
+assert.strictEqual(speechChunkMinChars(99), SPEECH_MIN_CHARS);
+assert.strictEqual(speechChunkMinChars(undefined), 30);         // malformed -> first step
+assert.strictEqual(speechChunkMinChars(-1), 30);
+
+// Each ramp step must render before the previous chunk finishes playing, or the
+// gap the chunking exists to avoid comes straight back. Measured on this box:
+// render = 0.3s + 0.0165s/char, audio = 0.049s/char.
+const renderCost = (chars) => 0.3 + 0.0165 * chars;
+const audioLength = (chars) => 0.049 * chars;
+for (let step = 1; step < SPEECH_CHUNK_RAMP.length; step++) {
+  const previous = SPEECH_CHUNK_RAMP[step - 1];
+  assert.ok(
+    renderCost(SPEECH_CHUNK_RAMP[step]) <= audioLength(previous),
+    `ramp step ${step} (${SPEECH_CHUNK_RAMP[step]} chars) cannot render inside ` +
+    `the ${audioLength(previous).toFixed(2)}s of audio from ${previous} chars`,
+  );
+}
+// The steady-state minimum must also be reachable from the last ramp step.
+assert.ok(renderCost(SPEECH_MIN_CHARS) <= audioLength(SPEECH_CHUNK_RAMP.at(-1)));
+
+// A sentence ending before the minimum is merged forward rather than spoken alone.
+const two = 'Timer set. I will let you know the moment that minute is up, sir.';
+assert.strictEqual(speechBoundary(two, false, 30), two.indexOf('up, sir.') + 'up, sir.'.length);
+// Once the text reaches the minimum, the first sentence end past it wins.
+assert.strictEqual(speechBoundary('A'.repeat(28) + '. tail here.', false, 30), 40);
+// Nothing is emitted mid-reply until a boundary qualifies...
+assert.strictEqual(speechBoundary('Timer set.', false, 30), -1);
+// ...but the final flush always speaks what is left, however short.
+assert.strictEqual(speechBoundary('Timer set.', true, 30), 10);
+// A run with no sentence end at all breaks at the cap rather than growing forever.
+assert.ok(speechBoundary('word '.repeat(80), false, 30) <= SPEECH_MAX_CHARS);
+console.log('speech chunking ramp: ok');

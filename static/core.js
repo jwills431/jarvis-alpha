@@ -309,8 +309,57 @@
     return now - oldest >= limit;
   }
 
+  // Chunking for streamed speech. Fish does not stream within a single request:
+  // measured on this box, an 880-character request delivers nothing for 14.9 s and
+  // then all 43 s of audio in one go. Splitting a reply across several requests is
+  // therefore the only way to speak before the whole thing has been synthesised.
+  //
+  // Two measured figures set the sizes. Time to first audio is about
+  // 0.3 s + 0.0165 s per character; the audio itself runs about 0.049 s per
+  // character. So any chunk over ~10 characters yields more audio than it costs to
+  // render, and once playback starts the buffer only grows. What governs the
+  // perceived delay is therefore the FIRST chunk, and nothing else.
+  //
+  // The ramp starts small so the first word arrives at ~0.8 s instead of ~2.3 s,
+  // then grows, each step sized to finish rendering before the previous chunk stops
+  // playing. Going straight to the steady-state size after a small first chunk
+  // would reintroduce a gap: a 220-character third chunk lands about 0.8 s late.
+  const SPEECH_CHUNK_RAMP = [30, 60, 120];
+  const SPEECH_MIN_CHARS = 90;
+  const SPEECH_MAX_CHARS = 220;
+
+  // How many characters the nth chunk of one reply must reach before it may be
+  // spoken. Beyond the ramp it settles at the steady-state minimum.
+  function speechChunkMinChars(index) {
+    const step = Number.isInteger(index) && index > 0 ? index : 0;
+    return step < SPEECH_CHUNK_RAMP.length ? SPEECH_CHUNK_RAMP[step] : SPEECH_MIN_CHARS;
+  }
+
+  function speechBoundary(text, final, minChars = SPEECH_MIN_CHARS) {
+    for (let index = 0; index < text.length; index++) {
+      const character = text[index];
+      let end = -1;
+      if (character === '\n') end = index + 1;
+      else if ('.!?'.includes(character) && (index === text.length - 1 || /\s/.test(text[index + 1]))) end = index + 1;
+      // A sentence end that would produce too short a chunk is skipped, so the
+      // short sentence is spoken together with the text that follows it.
+      if (end >= 0 && end >= minChars) return end;
+    }
+    if (text.length >= SPEECH_MAX_CHARS) {
+      const window = text.slice(0, SPEECH_MAX_CHARS);
+      let boundary = Math.max(window.lastIndexOf(', '), window.lastIndexOf('; '), window.lastIndexOf(': '));
+      if (boundary < minChars) boundary = window.lastIndexOf(' ');
+      if (boundary >= minChars) return boundary + 1;
+    }
+    // The final chunk has nothing after it, so a short one costs no gap.
+    return final ? text.length : -1;
+  }
+
   root.JarvisCore = Object.freeze({
     ALERT_MAX_DEFER_MS,
+    SPEECH_CHUNK_RAMP,
+    SPEECH_MAX_CHARS,
+    SPEECH_MIN_CHARS,
     ALERT_SOUND_IDS,
     resolveAlertSound,
     isConversationStopCommand,
@@ -330,6 +379,8 @@
     resolveSpeechSelection,
     shouldConsiderAutoMemory,
     shouldReleaseAlerts,
+    speechBoundary,
+    speechChunkMinChars,
     trimConversationHistory,
   });
 })(globalThis);

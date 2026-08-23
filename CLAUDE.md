@@ -125,6 +125,30 @@ suite, all green**. Windows Python also has pytest but skips 5 POSIX-only tests
 **Static assets are at `v=16`** — bump `?v=` in `static/index.html` whenever
 `app.js`, `core.js`, or `styles.css` changes, or browsers serve stale copies.
 
+## Fish does not stream within a request (measured 2026-08-23)
+
+Do not re-derive this. `streaming: true` on Fish's `/v1/tts` returns the WAV
+header immediately and then **nothing until the whole request is synthesised**.
+Measured here: an 880-character request producing 43 s of audio delivered its
+first audio byte at **14.9 s**, complete at 15.6 s, in two bursts. `chunk_length`
+(100/200/300) makes no useful difference, and `format: "pcm"` is rejected —
+*"Streaming only supports WAV format"*. The per-segment yield path exists in
+`fish_speech/inference_engine/__init__.py`, but the segments do not leave the
+server early at this pin/config (`--compile` is a suspect; not chased down).
+
+**Consequence:** splitting a reply into several requests is the *only* way to
+speak before the whole thing is synthesised — the client-side chunking is not
+overhead to remove, it is the mechanism. Two figures worth keeping:
+
+- time to first audio ≈ **0.3 s + 0.0165 s per character**
+- synthesis runs at about **2.8× realtime** (audio ≈ 0.049 s per character)
+
+Because generation outruns playback nearly 3:1, only the **first** chunk affects
+perceived latency. `SPEECH_CHUNK_RAMP` in `core.js` (30 → 60 → 120, then the
+steady 90) exists for that: measured first word **2.3 s → 1.2 s, no gaps**. For
+reference, llama-server generates at ~324 chars/s, so a short reply is fully
+written before the first word is spoken — that is expected, not a fault.
+
 ## The dedicated server (this machine)
 
 - Ryzen 7 7800X3D / **RTX 3060 12 GB** / 64 GB DDR5 / 4 TB NVMe. Fresh Windows 11,
