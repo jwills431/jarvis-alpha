@@ -690,6 +690,13 @@ const GREETINGS = [
   'Online and at your service, sir. Everything checks out.',
 ];
 let greeted = false;
+// The greeting belongs to the Initiate gesture, and only to it. audioUnlocked
+// flips on the first pointerdown or keydown ANYWHERE on the document — including
+// the tap that skips the boot readout — and checkHealth calls maybeGreet on every
+// five-second poll. Without this gate JARVIS greets an overlay that is still up,
+// to someone who has not started yet. Set when the overlay is dismissed, or at
+// once if there is no overlay to dismiss.
+let initiated = false;
 
 function timeOfDayGreeting() {
   const hour = new Date().getHours();
@@ -763,7 +770,7 @@ function playGreetingNow() {
 // Fallback for when speech was not ready in time to pre-render: greet through
 // the normal queue once it is. Less reliable on iOS, hence the path above.
 function maybeGreet() {
-  if (greeted || !audioUnlocked || !speechEnabled || !speechReady) return;
+  if (!initiated || greeted || !audioUnlocked || !speechEnabled || !speechReady) return;
   if (greetingBlob) { playGreetingNow(); return; }
   greeted = true;
   const line = pickGreeting();
@@ -2506,7 +2513,7 @@ async function runBootSequence(boot, start) {
 (() => {
   const boot = document.querySelector('#boot');
   const start = document.querySelector('#boot-start');
-  if (!boot || !start) return;
+  if (!boot || !start) { initiated = true; return; }
   // Reduced motion suppresses the ANIMATION, not the control: the button is how
   // audio gets unlocked, so removing it would leave no way to start the greeting.
   // With motion reduced the overlay simply appears complete and ready at once.
@@ -2529,6 +2536,7 @@ async function runBootSequence(boot, start) {
     start.classList.add('shown');
   });
   const activate = () => {
+    initiated = true;
     unlockAudio();
     // Inside the gesture: play the pre-rendered greeting, or claim it for the
     // moment it finishes rendering.
