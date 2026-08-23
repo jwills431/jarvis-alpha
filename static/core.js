@@ -10,10 +10,34 @@
     return value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
+  // Beyond the fixed phrases above, people ask for conversation mode to end in
+  // whatever words come to mind, and the recognizer's wording varies too. These
+  // match on intent — a stopping verb near the thing being stopped — rather than
+  // on an exact sentence.
+  const CONVERSATION_STOP_VERBS =
+    '(?:turn(?: it)? off|switch(?: it)? off|shut(?: it)?(?: off| down)|disable|exit|leave|quit|end|stop|cancel|close)';
+  const CONVERSATION_STOP_TARGETS =
+    '(?:conversation(?: mode)?|listening|voice mode|the mic|the microphone|mic|microphone)';
+  const conversationStopPatterns = [
+    new RegExp(`\\b${CONVERSATION_STOP_VERBS}\\b(?:\\s+\\w+){0,3}\\s+\\b${CONVERSATION_STOP_TARGETS}\\b`),
+    /\b(?:go|going|switch|back)\s+(?:back\s+)?(?:to\s+)?(?:silent|quiet|text only|text)\b/,
+    /\bstop\s+(?:listening|talking)\b/,
+  ];
+
+  // "How do I turn off conversation mode?" is a question about the feature, not a
+  // request to use it. Only the loose intent patterns are guarded this way; the
+  // fixed phrases keep their existing literal behaviour.
+  function looksLikeQuestionAboutConversation(normalized) {
+    return /^(?:how|what|why|when|where|which|who|can you tell me|tell me|explain|does|do you|is there|are there)\b/
+      .test(normalized);
+  }
+
   function isConversationStopCommand(value) {
     if (typeof value !== 'string') return false;
-    const normalized = ` ${normalizeConversationCommand(value)} `;
-    return conversationStopCommands.some((command) => normalized.includes(` ${command} `));
+    const normalized = normalizeConversationCommand(value);
+    if (conversationStopCommands.some((command) => ` ${normalized} `.includes(` ${command} `))) return true;
+    if (looksLikeQuestionAboutConversation(normalized)) return false;
+    return conversationStopPatterns.some((pattern) => pattern.test(normalized));
   }
 
   function unsupportedActionResponse(value) {
@@ -247,7 +271,46 @@
     };
   }
 
+  // A timer alert must not cut off a reply that is already being spoken, but the
+  // server hands each fired timer over exactly once — so an alert dropped here is
+  // gone for good. These two decide when a queued alert may be released; app.js
+  // owns the sound and the announcement.
+  const ALERT_MAX_DEFER_MS = 20000;
+
+  function mergeFiredAlerts(queued, incoming, now) {
+    const merged = Array.isArray(queued) ? queued.slice() : [];
+    if (!Array.isArray(incoming)) return merged;
+    const seen = new Set();
+    for (const entry of merged) {
+      const id = entry && entry.fired && entry.fired.id;
+      if (id) seen.add(id);
+    }
+    for (const fired of incoming) {
+      const id = fired && fired.id;
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      merged.push({fired, queuedAt: now});
+    }
+    return merged;
+  }
+
+  function shouldReleaseAlerts(queued, speaking, now, maxDeferMs) {
+    if (!Array.isArray(queued) || queued.length === 0) return false;
+    if (!speaking) return true;
+    // Speaking, so hold — but never past the deferral ceiling, or a long reply
+    // (or a stuck speaking flag) would swallow the alert entirely.
+    const limit = typeof maxDeferMs === 'number' ? maxDeferMs : ALERT_MAX_DEFER_MS;
+    let oldest = Infinity;
+    for (const entry of queued) {
+      const queuedAt = entry && entry.queuedAt;
+      if (typeof queuedAt === 'number' && queuedAt < oldest) oldest = queuedAt;
+    }
+    if (oldest === Infinity) return true;
+    return now - oldest >= limit;
+  }
+
   root.JarvisCore = Object.freeze({
+    ALERT_MAX_DEFER_MS,
     ALERT_SOUND_IDS,
     resolveAlertSound,
     isConversationStopCommand,
@@ -262,9 +325,11 @@
     isLearnModeStartCommand,
     isLearnModeStopCommand,
     isMemoryControlCommand,
+    mergeFiredAlerts,
     parseStreamLine,
     resolveSpeechSelection,
     shouldConsiderAutoMemory,
+    shouldReleaseAlerts,
     trimConversationHistory,
   });
 })(globalThis);

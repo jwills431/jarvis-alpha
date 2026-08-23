@@ -65,8 +65,10 @@ const {
   isMemoryControlCommand,
   formatMessageTimestamp,
   formatTimerAlert,
+  mergeFiredAlerts,
   parseStreamLine,
   shouldConsiderAutoMemory,
+  shouldReleaseAlerts,
   trimConversationHistory,
   unsupportedActionResponse,
 } = globalThis.JarvisCore;
@@ -82,6 +84,13 @@ let speechEnabled = true;
 let toolsEnabled = false;
 let timerPollHandle = null;
 let timerPollInFlight = false;
+// Fired alerts wait here for a gap in the speech rather than interrupting it.
+// speakFiredTimers invalidates the in-flight utterance, so announcing during a
+// reply used to cut the reply off — or be cut off by the next one, losing an
+// alert the server had already handed over for the only time.
+let pendingAlerts = [];
+let alertFlushHandle = null;
+let alertFlushInFlight = false;
 let speechActive = false;
 let speechRequestId = 0;
 // Two chains so rendering can run ahead of playback (browser mode). speechQueue
@@ -115,6 +124,7 @@ let conversationEnabled = false;
 let conversationStarting = false;
 let conversationAudio = null;
 let conversationTurnId = 0;
+let conversationAutoStartHandle = null;
 let memoryReady = false;
 let memoryItemChars = 1000;
 let autoMemoryAvailable = false;
@@ -1083,6 +1093,34 @@ function speakFiredTimers(list) {
   queueSpeech(spoken, requestId, 'JARVIS is announcing a timer.');
 }
 
+function queueFiredTimers(list) {
+  pendingAlerts = mergeFiredAlerts(pendingAlerts, list, Date.now());
+  if (alertFlushHandle === null) alertFlushHandle = setInterval(() => { void flushFiredAlerts(); }, 500);
+  void flushFiredAlerts();
+}
+
+async function flushFiredAlerts() {
+  if (alertFlushInFlight) return;
+  if (!shouldReleaseAlerts(pendingAlerts, speechActive, Date.now())) {
+    if (pendingAlerts.length === 0 && alertFlushHandle !== null) {
+      clearInterval(alertFlushHandle);
+      alertFlushHandle = null;
+    }
+    return;
+  }
+  const batch = pendingAlerts.splice(0, pendingAlerts.length).map((entry) => entry.fired);
+  alertFlushInFlight = true;
+  try {
+    await announceFiredTimers(batch);
+  } finally {
+    alertFlushInFlight = false;
+    if (pendingAlerts.length === 0 && alertFlushHandle !== null) {
+      clearInterval(alertFlushHandle);
+      alertFlushHandle = null;
+    }
+  }
+}
+
 async function announceFiredTimers(list) {
   // Play the alert sound(s) first — always, even when the voice is muted — then
   // the spoken announcement (if voice is on). Distinct sounds per kind, played
@@ -1136,7 +1174,7 @@ async function pollTimers() {
     const data = await response.json();
     if (Array.isArray(data.fired) && data.fired.length) {
       data.fired.forEach(renderFiredTimerCard);
-      void announceFiredTimers(data.fired);
+      queueFiredTimers(data.fired);
     }
   } catch {
     // Transient (e.g. app briefly down); the next tick retries.
@@ -1818,6 +1856,31 @@ function processConversationAudio(state, audioEvent) {
   }
 }
 
+// Conversation mode is where JARVIS is meant to be used, so pressing Initiate
+// drops straight into it rather than leaving the microphone for a second click.
+// It cannot start inside that gesture, though: the greeting is playing, and
+// startConversation stops any speech in progress — so it would cut the greeting
+// off and then open the microphone onto JARVIS's own voice. Wait for the
+// recognizer to be up and the room to be quiet, and stand down if the user
+// reaches for anything themselves first.
+function scheduleConversationAutoStart() {
+  if (conversationAutoStartHandle !== null) return;
+  const deadline = Date.now() + 30000;
+  const standDown = () => {
+    clearInterval(conversationAutoStartHandle);
+    conversationAutoStartHandle = null;
+  };
+  conversationAutoStartHandle = setInterval(() => {
+    if (conversationEnabled || conversationStarting || audioState || Date.now() > deadline) {
+      standDown();
+      return;
+    }
+    if (!voiceReady || sendEl.disabled || speechActive || pendingSpeech.size > 0) return;
+    standDown();
+    void startConversation();
+  }, 500);
+}
+
 async function startConversation() {
   if (!voiceReady || conversationStarting || conversationEnabled || audioState || sendEl.disabled) return;
   conversationStarting = true;
@@ -2420,6 +2483,7 @@ async function runBootSequence(boot, start) {
     // moment it finishes rendering.
     if (!playGreetingNow()) greetingPending = true;
     boot.classList.add('dismissed');
+    scheduleConversationAutoStart();
     setTimeout(() => boot.remove(), reduced ? 0 : 700);
     focusPrompt();
   };

@@ -13,11 +13,13 @@ const {
   isMemoryControlCommand,
   formatMessageTimestamp,
   formatTimerAlert,
+  mergeFiredAlerts,
   parseStreamLine,
   ALERT_SOUND_IDS,
   resolveAlertSound,
   resolveSpeechSelection,
   shouldConsiderAutoMemory,
+  shouldReleaseAlerts,
   trimConversationHistory,
   unsupportedActionResponse,
 } = globalThis.JarvisCore;
@@ -27,6 +29,20 @@ assert.strictEqual(isConversationStopCommand('Please stop listening now.'), true
 assert.strictEqual(isConversationStopCommand('We can end conversation here.'), true);
 assert.strictEqual(isConversationStopCommand('goodbye journalism'), false);
 assert.strictEqual(isConversationStopCommand('please keep listening'), false);
+
+// Natural ways of asking for conversation mode to end, beyond the fixed phrases.
+assert.strictEqual(isConversationStopCommand('Turn off conversation mode.'), true);
+assert.strictEqual(isConversationStopCommand('Can you exit conversation mode please?'), true);
+assert.strictEqual(isConversationStopCommand('Disable conversation mode for now.'), true);
+assert.strictEqual(isConversationStopCommand('Jarvis, I need to go silent for a bit but keep going via text.'), true);
+assert.strictEqual(isConversationStopCommand('Can we switch to text only?'), true);
+assert.strictEqual(isConversationStopCommand('Close the microphone.'), true);
+
+// Questions about the feature are not requests to use it.
+assert.strictEqual(isConversationStopCommand('How do I turn off conversation mode?'), false);
+assert.strictEqual(isConversationStopCommand('What does conversation mode do?'), false);
+assert.strictEqual(isConversationStopCommand('Conversation mode is useful.'), false);
+assert.strictEqual(isConversationStopCommand('I stopped the microwave.'), false);
 
 assert.match(unsupportedActionResponse('Set a reminder in 30 minutes.'), /not available/i);
 assert.match(unsupportedActionResponse('Remind me to check the oven.'), /not available/i);
@@ -242,3 +258,37 @@ assert.strictEqual(resolveAlertSound('nonexistent', 'chime'), 'chime');  // fall
 assert.strictEqual(resolveAlertSound(null, 'beep'), 'beep');             // no stored -> fallback
 assert.strictEqual(resolveAlertSound('nope', 'alsobad'), ALERT_SOUND_IDS[0]); // both invalid -> first
 console.log('alert sound selection: ok');
+
+// ---------- fired-alert queue (never interrupt a reply, never lose an alert) ----------
+const t0 = 1_000_000;
+
+// Merging stamps each new alert with its arrival time and keeps the queue in order.
+let queue = mergeFiredAlerts([], [{id: 'a'}, {id: 'b'}], t0);
+assert.strictEqual(queue.length, 2);
+assert.strictEqual(queue[0].fired.id, 'a');
+assert.strictEqual(queue[0].queuedAt, t0);
+
+// The server hands each fired timer over once, but a re-delivered id must not double.
+queue = mergeFiredAlerts(queue, [{id: 'b'}, {id: 'c'}], t0 + 4000);
+assert.deepStrictEqual(queue.map((entry) => entry.fired.id), ['a', 'b', 'c']);
+assert.strictEqual(queue[2].queuedAt, t0 + 4000);
+
+// Nothing queued: nothing to release.
+assert.strictEqual(shouldReleaseAlerts([], false, t0), false);
+assert.strictEqual(shouldReleaseAlerts(null, false, t0), false);
+
+// Silent: release at once.
+assert.strictEqual(shouldReleaseAlerts(queue, false, t0), true);
+
+// Speaking: hold, so the alert does not cut the reply off mid-sentence.
+assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 1000), false);
+
+// Still speaking past the ceiling: release anyway rather than lose it. The oldest
+// entry governs, so a newer alert cannot keep resetting the clock.
+assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 19_999), false);
+assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 20_000), true);
+assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 1000, 500), true);
+
+// A malformed entry must not strand the queue forever.
+assert.strictEqual(shouldReleaseAlerts([{fired: {id: 'x'}}], true, t0), true);
+console.log('fired-alert queue: ok');
