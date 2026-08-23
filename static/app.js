@@ -34,6 +34,11 @@ const learnToggleEl = document.querySelector('#learn-toggle');
 const learnHintEl = document.querySelector('#learn-hint');
 const speechSettingsToggleEl = document.querySelector('#speech-settings-toggle');
 const speechSettingsBackdropEl = document.querySelector('#speech-settings-backdrop');
+const timersBackdropEl = document.querySelector('#timers-backdrop');
+const timersToggleEl = document.querySelector('#timers-toggle');
+const timersCloseEl = document.querySelector('#timers-close');
+const timersStatusEl = document.querySelector('#timers-status');
+const timersListEl = document.querySelector('#timers-list');
 const speechSettingsCloseEl = document.querySelector('#speech-settings-close');
 const speechSettingsFormEl = document.querySelector('#speech-settings-form');
 const speechVoiceEl = document.querySelector('#speech-voice');
@@ -125,6 +130,8 @@ let conversationStarting = false;
 let conversationAudio = null;
 let conversationTurnId = 0;
 let conversationAutoStartHandle = null;
+// Latest pending list from the timer poll, so the panel renders without its own fetch.
+let pendingTimers = [];
 let memoryReady = false;
 let memoryItemChars = 1000;
 let autoMemoryAvailable = false;
@@ -1093,6 +1100,72 @@ function speakFiredTimers(list) {
   queueSpeech(spoken, requestId, 'JARVIS is announcing a timer.');
 }
 
+function renderTimersPanel() {
+  if (timersBackdropEl.hidden) return;
+  timersListEl.replaceChildren();
+  if (!pendingTimers.length) {
+    timersStatusEl.textContent = 'Nothing pending. Ask JARVIS to set a timer or a reminder.';
+    return;
+  }
+  const count = pendingTimers.length;
+  timersStatusEl.textContent = `${count} pending ${count === 1 ? 'item' : 'items'}.`;
+  for (const item of pendingTimers) {
+    const row = document.createElement('div');
+    row.className = 'timer-row';
+    const kind = document.createElement('span');
+    kind.className = 'timer-kind';
+    kind.textContent = item.kind === 'reminder' ? 'Reminder' : 'Timer';
+    const what = document.createElement('span');
+    what.className = 'timer-what';
+    what.textContent = item.label || (item.kind === 'reminder' ? 'Reminder' : 'Timer');
+    const when = document.createElement('span');
+    when.className = 'timer-when';
+    when.textContent = item.fire_at_spoken || '';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => { void cancelTimer(item.id, cancel); });
+    row.append(kind, what, when, cancel);
+    timersListEl.appendChild(row);
+  }
+}
+
+async function cancelTimer(id, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/timers/${encodeURIComponent(id)}`, {method: 'DELETE'});
+    if (!response.ok) throw new Error('cancel failed');
+    // Drop it locally so the row goes at once; the next poll is authoritative.
+    pendingTimers = pendingTimers.filter((item) => item.id !== id);
+    renderTimersPanel();
+  } catch {
+    button.disabled = false;
+    timersStatusEl.textContent = 'That timer could not be cancelled. It may have already fired.';
+  }
+}
+
+function openTimersPanel() {
+  if (!memoryBackdropEl.hidden) closeMemoryPanel();
+  if (!speechSettingsBackdropEl.hidden) closeSpeechSettings();
+  timersBackdropEl.hidden = false;
+  renderTimersPanel();
+  timersCloseEl.focus();
+}
+
+function closeTimersPanel() {
+  timersBackdropEl.hidden = true;
+  timersToggleEl.focus();
+}
+
+timersToggleEl.addEventListener('click', () => {
+  if (timersBackdropEl.hidden) openTimersPanel();
+  else closeTimersPanel();
+});
+timersCloseEl.addEventListener('click', closeTimersPanel);
+timersBackdropEl.addEventListener('pointerdown', (event) => {
+  if (event.target === timersBackdropEl) closeTimersPanel();
+});
+
 function queueFiredTimers(list) {
   pendingAlerts = mergeFiredAlerts(pendingAlerts, list, Date.now());
   if (alertFlushHandle === null) alertFlushHandle = setInterval(() => { void flushFiredAlerts(); }, 500);
@@ -1172,6 +1245,8 @@ async function pollTimers() {
     const response = await fetch('/api/timers', {cache: 'no-store'});
     if (!response.ok) return;
     const data = await response.json();
+    pendingTimers = Array.isArray(data.pending) ? data.pending : [];
+    renderTimersPanel();
     if (Array.isArray(data.fired) && data.fired.length) {
       data.fired.forEach(renderFiredTimerCard);
       queueFiredTimers(data.fired);
@@ -1236,6 +1311,10 @@ async function checkHealth() {
     if (!speechReady && !speechSettingsBackdropEl.hidden) closeSpeechSettings();
     toolsEnabled = response.ok && state.tools === 'ready';
     if (toolsEnabled) startTimerPolling(); else stopTimerPolling();
+    // The panel only means anything with the tool loop on, so the control only
+    // appears then; hiding it also closes it if tools go away mid-session.
+    timersToggleEl.hidden = !toolsEnabled;
+    if (!toolsEnabled && !timersBackdropEl.hidden) closeTimersPanel();
     memoryReady = response.ok && state.memory === 'ready';
     autoMemoryAvailable = memoryReady && state.auto_memory === 'ready';
     if (!autoMemoryInitialized) {
@@ -1282,6 +1361,7 @@ async function checkHealth() {
     if (learnModeEnabled) setLearnMode(false, 'Learn mode stopped because the application is unavailable.');
     if (!memoryBackdropEl.hidden) closeMemoryPanel();
     if (!speechSettingsBackdropEl.hidden) closeSpeechSettings();
+    if (!timersBackdropEl.hidden) closeTimersPanel();
     return false;
   }
 }
@@ -2253,6 +2333,7 @@ memoryBackdropEl.addEventListener('click', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !memoryBackdropEl.hidden) closeMemoryPanel();
   if (event.key === 'Escape' && !speechSettingsBackdropEl.hidden) closeSpeechSettings();
+  if (event.key === 'Escape' && !timersBackdropEl.hidden) closeTimersPanel();
 });
 memoryFormEl.addEventListener('submit', async (event) => {
   event.preventDefault();

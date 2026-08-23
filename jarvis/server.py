@@ -410,6 +410,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         if not self._require_auth():
             return
+        timer_id = self._timer_id_from_path()
+        if timer_id is not None:
+            self._timer_cancel(timer_id)
+            return
         memory_id = self._memory_id_from_path()
         if memory_id is None:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
@@ -506,6 +510,32 @@ class Handler(BaseHTTPRequestHandler):
                         arguments={"label": fired["label"]}, action_id=fired["id"])
         self._json(HTTPStatus.OK, result)
 
+    def _timer_cancel(self, timer_id: str) -> None:
+        """Cancel one pending timer or reminder from the desktop panel.
+
+        The same operation the cancel_timer tool performs, reached directly so the
+        panel does not have to go through the model. Audited identically, since the
+        audit log is the record of everything that touched a timer.
+        """
+        if not self.config.tools_enabled:
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "tools_disabled"})
+            return
+        try:
+            cancelled = timers.TimerStore(self.config).cancel(timer_id=timer_id)
+        except timers.TimerNotFound:
+            self._json(HTTPStatus.NOT_FOUND, {"error": "timer_not_found"})
+            return
+        except timers.TimerValidationError:
+            self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": "timer_invalid"})
+            return
+        except timers.TimerError:
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "timers_unavailable"})
+            return
+        for item in cancelled:
+            tools.audit(self.config, "timer_cancelled", tool=item["kind"],
+                        arguments={"label": item.get("label")}, action_id=item["id"])
+        self._json(HTTPStatus.OK, {"status": "cancelled", "cancelled": len(cancelled)})
+
     def _speech_options(self) -> None:
         if not speech.runtime_ready(self.config):
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "speech_unavailable"})
@@ -601,6 +631,13 @@ class Handler(BaseHTTPRequestHandler):
             return None
         memory_id = self.path[len(prefix):]
         return memory_id if memory_id and "/" not in memory_id and "?" not in memory_id else None
+
+    def _timer_id_from_path(self) -> str | None:
+        prefix = "/api/timers/"
+        if not self.path.startswith(prefix):
+            return None
+        timer_id = self.path[len(prefix):]
+        return timer_id if timer_id and "/" not in timer_id and "?" not in timer_id else None
 
     def _sse_text(self, value: str) -> None:
         self._headers(HTTPStatus.OK, "text/event-stream; charset=utf-8")

@@ -304,21 +304,21 @@ body.jarvis-speaking{--orb-hot-op:calc(.75 + var(--amp) * .25);
 @keyframes bootout{to{opacity:0;visibility:hidden}}
 
 /* ---------- dialogs ---------- */
-#memory-backdrop,#speech-settings-backdrop{
+#memory-backdrop,#speech-settings-backdrop,#timers-backdrop{
   position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:20px;
   background:rgba(2,8,12,.84);backdrop-filter:blur(3px);
 }
-#memory-panel,#speech-settings-panel{
+#memory-panel,#speech-settings-panel,#timers-panel{
   width:min(720px,100%);max-height:min(820px,calc(100dvh - 40px));overflow-y:auto;
   border:1px solid var(--line);padding:22px;background:var(--panel-solid);border-radius:0;
   box-shadow:0 24px 80px rgba(0,0,0,.6),0 0 40px rgba(77,216,255,.07);
   clip-path:polygon(16px 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%,0 16px);
 }
 #speech-settings-panel{width:min(560px,100%)}
-#memory-panel header,#speech-settings-panel header{align-items:flex-start;padding-bottom:14px}
-#memory-panel h2,#speech-settings-panel h2{margin:0;font-size:1rem;letter-spacing:.22em;
+#memory-panel header,#speech-settings-panel header,#timers-panel header{align-items:flex-start;padding-bottom:14px}
+#memory-panel h2,#speech-settings-panel h2,#timers-panel h2{margin:0;font-size:1rem;letter-spacing:.22em;
   text-transform:uppercase;font-weight:500;color:var(--ice)}
-#memory-panel header p,#speech-settings-panel header p{margin:.4rem 0 0;font-family:var(--mono);
+#memory-panel header p,#speech-settings-panel header p,#timers-panel header p{margin:.4rem 0 0;font-family:var(--mono);
   font-size:.62rem;letter-spacing:.08em;color:var(--muted);text-transform:none}
 #memory-status,#speech-settings-status{font-family:var(--mono);font-size:.66rem;color:#8fbccd;min-height:1.3em}
 #memory-form,#speech-settings-form{border:1px solid var(--line);padding:14px;background:rgba(4,14,20,.7)}
@@ -456,3 +456,18 @@ body.jarvis-speaking{--orb-hot-op:calc(.75 + var(--amp) * .25);
 /* Line and button visibility are driven by the typing sequence now, so .static
    only governs how the overlay leaves. Scoped so the normal fade-out still plays. */
 #boot.static.dismissed{display:none}
+
+/* Pending timers/reminders. Desktop only for now: on a phone the header has no
+   room for another control, and the voice path (“what timers do I have?”)
+   already covers it. */
+.timer-row{display:flex;align-items:center;gap:12px;padding:10px 0;
+  border-bottom:1px solid rgba(120,200,255,.12)}
+.timer-row:last-child{border-bottom:0}
+.timer-row .timer-when{font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;
+  opacity:.75;white-space:nowrap}
+.timer-row .timer-what{flex:1;min-width:0;overflow-wrap:anywhere}
+.timer-row .timer-kind{font-family:var(--mono);font-size:.6rem;letter-spacing:.18em;
+  text-transform:uppercase;opacity:.55}
+@media (max-width:700px){
+  #timers-toggle{display:none}
+}

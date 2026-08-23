@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from jarvis.config import Config, load_config
 from jarvis.backend import BackendError, count_unsupported_script_characters, sanitize_sse_line, stream_chat
-from jarvis.server import SYSTEM_PROMPT, JarvisServer, check_basic_auth, static_route, exact_spelling_recall, extract_authoritative_spellings, is_source_bound_request, prepare_model_messages, validate_messages, verify_password
+from jarvis.server import SYSTEM_PROMPT, Handler, JarvisServer, check_basic_auth, static_route, exact_spelling_recall, extract_authoritative_spellings, is_source_bound_request, prepare_model_messages, validate_messages, verify_password
 from jarvis import speech
 from jarvis.speech import (
     SpeechError,
@@ -1187,6 +1187,33 @@ class StreamSanitizationTests(unittest.TestCase):
         ):
             with self.assertRaises(BackendError):
                 list(stream_chat(Config(), [{"role": "user", "content": "test"}]))
+
+class TimerRouteTests(unittest.TestCase):
+    """The DELETE /api/timers/<id> path parser the desktop panel cancels through.
+
+    Only self.path is touched, so the handler method can be exercised directly
+    rather than standing a server up.
+    """
+
+    def parse(self, path):
+        request = SimpleNamespace(path=path)
+        return Handler._timer_id_from_path(request)
+
+    def test_extracts_a_timer_id(self):
+        self.assertEqual(self.parse("/api/timers/abc123"), "abc123")
+
+    def test_ignores_the_poll_route(self):
+        self.assertIsNone(self.parse("/api/timers"))
+        self.assertIsNone(self.parse("/api/timers/"))
+
+    def test_ignores_other_routes(self):
+        self.assertIsNone(self.parse("/api/memories/abc123"))
+
+    def test_rejects_a_nested_or_query_path(self):
+        # Anything with more structure than a bare id is not a cancel target.
+        self.assertIsNone(self.parse("/api/timers/abc/extra"))
+        self.assertIsNone(self.parse("/api/timers/abc?force=1"))
+
 
 class TranscriptionTests(unittest.TestCase):
     def test_accepts_bounded_pcm_wav(self):
