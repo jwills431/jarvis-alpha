@@ -43,9 +43,15 @@ class Config:
     fish_base_url: str = "http://127.0.0.1:8080"
     fish_voice_name: str = "JARVIS (Fish)"
     fish_reference_id: str = "jarvis"
-    fish_temperature: float = 0.7
-    fish_top_p: float = 0.7
-    fish_repetition_penalty: float = 1.2
+    # Chosen by listening to a fixed-seed sweep of the same phrase (2026-08-23).
+    # The previous 0.7/0.7/1.2 sat below Fish's own defaults on sampling and above
+    # them on the penalty, which flattens prosody: the penalty discourages repeated
+    # token patterns, and in an audio model those patterns include the rises and
+    # falls that make speech sound alive. Costs nothing — render time was flat
+    # across the whole sweep (3.2-3.5s for the same sentence).
+    fish_temperature: float = 1.0
+    fish_top_p: float = 0.95
+    fish_repetition_penalty: float = 1.05
     fish_max_new_tokens: int = 1024
     request_timeout_seconds: int = 180
     max_request_bytes: int = 65_536
