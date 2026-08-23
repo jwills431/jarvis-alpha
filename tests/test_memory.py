@@ -30,7 +30,8 @@ class MemoryStoreTests(unittest.TestCase):
             reopened = self.make_store(directory)
             self.assertEqual(reopened.list()[0]["id"], created["id"])
             self.assertEqual(reopened.list()[0]["text"], "I prefer concise replies.")
-            self.assertEqual(os.stat(Path(directory) / "memory.json").st_mode & 0o777, 0o600)
+            if os.name == "posix":  # NTFS has no mode bits; enforced on the deployment platform
+                self.assertEqual(os.stat(Path(directory) / "memory.json").st_mode & 0o777, 0o600)
 
     def test_update_creates_recoverable_backup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -39,7 +40,8 @@ class MemoryStoreTests(unittest.TestCase):
             store.update(created["id"], "environment", "The office printer is Atlas.")
             backup = json.loads((Path(directory) / "memory.json.bak").read_text())
             self.assertEqual(backup["items"][0]["text"], "The local printer is Atlas.")
-            self.assertEqual(os.stat(Path(directory) / "memory.json.bak").st_mode & 0o777, 0o600)
+            if os.name == "posix":  # NTFS has no mode bits; enforced on the deployment platform
+                self.assertEqual(os.stat(Path(directory) / "memory.json.bak").st_mode & 0o777, 0o600)
 
     def test_duplicate_ignores_case_and_terminal_punctuation(self):
         with tempfile.TemporaryDirectory() as directory:

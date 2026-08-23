@@ -328,6 +328,12 @@ def _ordinal(day: int) -> str:
     return f"{day}{suffix}"
 
 
+def _clock_12h(local: datetime) -> str:
+    """A 12-hour clock with no leading zero. `%-I` is glibc-only, so build it
+    by hand — the app runs on Linux but the tests must pass anywhere."""
+    return f"{(local.hour % 12) or 12}:{local:%M %p}"
+
+
 def _get_time(arguments: dict, config: Config) -> dict:
     """Return the server's current local date and time (read-only).
 
@@ -340,7 +346,7 @@ def _get_time(arguments: dict, config: Config) -> dict:
     """
     now = datetime.now().astimezone()
     day = _ordinal(now.day)
-    clock = now.strftime("%-I:%M %p")
+    clock = _clock_12h(now)
     result = {
         "iso": now.isoformat(timespec="seconds"),
         "date": now.strftime("%Y-%m-%d"),

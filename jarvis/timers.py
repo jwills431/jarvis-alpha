@@ -68,11 +68,17 @@ def _ordinal(day: int) -> str:
     return f"{day}{suffix}"
 
 
+def _clock_12h(local: datetime) -> str:
+    """A 12-hour clock with no leading zero. `%-I` is glibc-only, so build it
+    by hand — the app runs on Linux but the tests must pass anywhere."""
+    return f"{(local.hour % 12) or 12}:{local:%M %p}"
+
+
 def _spoken(epoch: float) -> str:
     """A natural local-time phrasing for a fire time, matching get_time's style."""
     local = datetime.fromtimestamp(epoch).astimezone()
     day = _ordinal(local.day)
-    return f"{local.strftime('%A, %B')} {day} at {local.strftime('%-I:%M %p')}"
+    return f"{local.strftime('%A, %B')} {day} at {_clock_12h(local)}"
 
 
 _CLOCK_RE = re.compile(r"^\s*(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?\s*$", re.IGNORECASE)

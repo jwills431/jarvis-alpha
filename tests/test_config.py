@@ -1051,6 +1051,7 @@ class SpeechTests(unittest.TestCase):
             patch("jarvis.speech.voice_engine", return_value="piper"),
         )
 
+    @unittest.skipUnless(os.name == "posix", "the fake worker is a POSIX shell shim")
     def test_the_voice_model_loads_once_across_many_phrases(self):
         # The point of the worker: three sentences must not pay three model
         # loads, which is what made the pause between spoken sentences long.
@@ -1067,6 +1068,7 @@ class SpeechTests(unittest.TestCase):
             self.assertEqual([item["text"] for item in sent],
                              ["First sentence.", "Second sentence.", "Third sentence."])
 
+    @unittest.skipUnless(os.name == "posix", "the fake worker is a POSIX shell shim")
     def test_worker_restarts_once_after_it_dies(self):
         with tempfile.TemporaryDirectory() as root:
             config, starts, _ = self._worker_fixture(root)
@@ -1079,6 +1081,7 @@ class SpeechTests(unittest.TestCase):
                 speech.speak(config, "Second sentence.")
             self.assertEqual(starts.read_text().count("start"), 2)
 
+    @unittest.skipUnless(os.name == "posix", "the fake worker is a POSIX shell shim")
     def test_a_worker_that_fails_every_request_reports_failure(self):
         with tempfile.TemporaryDirectory() as root:
             config, starts, _ = self._worker_fixture(root)
@@ -1099,6 +1102,7 @@ class SpeechTests(unittest.TestCase):
                 with self.assertRaises(SpeechError):
                     speech.speak(config, "Never spoken.")
 
+    @unittest.skipUnless(os.name == "posix", "the fake worker is a POSIX shell shim")
     def test_the_utterance_never_reaches_the_worker_arguments(self):
         with tempfile.TemporaryDirectory() as root:
             config, _, requests = self._worker_fixture(root)
@@ -1127,6 +1131,7 @@ class SpeechTests(unittest.TestCase):
                 speech.speak(config, "interrupted reply text")
             self.assertFalse(os.path.exists(rendered[0]), "the discarded render must be deleted")
 
+    @unittest.skipUnless(os.name == "posix", "the fake worker is a POSIX shell shim")
     def test_shutdown_releases_the_worker(self):
         with tempfile.TemporaryDirectory() as root:
             config, _, _ = self._worker_fixture(root)
