@@ -1,79 +1,94 @@
-# Backlog — to review & refine (captured 2026-08-05)
+# Backlog — captured 2026-08-05, built 2026-08-23
 
-Items Joseph flagged after the Stage 0/1 + alert-sounds session. Not started;
-each has a problem statement, what already exists, and candidate directions to
-discuss before building.
+Items Joseph flagged after the Stage 0/1 + alert-sounds session. **All four are
+now implemented and covered by tests, but none has been confirmed on-device** —
+the stack was down for this session, so everything below is verified only by the
+suite (222 pytest + `tests/test_core.js`, all green on WSL). The on-device pass at
+the bottom is the remaining work.
 
-## 1. Non-speech audio is transcribed as user input
+---
 
-**Problem:** the recognizer sometimes hears background/non-speech audio, produces
-text from it, and JARVIS responds to a nonsense prompt.
+## 1. Non-speech audio transcribed as user input — DONE (code)
 
-**What already exists** (`jarvis/transcription.py`):
-- `validate_speech_energy()` — an RMS energy/activity gate, applied on **every**
-  path, with stricter thresholds in conversation mode
-  (`CONVERSATION_MIN_ACTIVE_WINDOWS`, `CONVERSATION_MIN_PEAK_TO_FLOOR_RATIO`).
-- Silero **VAD** (`--vad`, `--vad-threshold`, conversation-specific threshold)
-  and `NON_SPEECH_CAPTIONS` filtering ("music", "applause", "[BLANK_AUDIO]", …).
-- **Likely root cause:** the VAD flags are only passed on the `whisper-cli`
-  path. The **resident `whisper-server` path (which the server is currently
-  using, `whisper_server_url` = :8088) does NOT apply Silero VAD or the stricter
-  conversation threshold** — only `validate_speech_energy` gates it. This is
-  already noted in `docs/SERVER_BUILD_PROGRESS.md`.
+**Was:** the recognizer heard background noise, produced text from it, and JARVIS
+answered a nonsense prompt.
 
-**Directions to explore:** enable VAD on the whisper-server path (server launch
-flags or per-request params, if v1.9.1's server supports them); tighten the
-energy-gate thresholds; reject low-confidence / `no_speech`-heavy results; or run
-a lightweight VAD client-side before uploading the clip. Decide per-path vs a
-single shared gate. Measure against real false-trigger clips.
+**Cause, as suspected in the original note:** the VAD and non-speech suppression
+flags were only ever passed on the `whisper-cli` path. Since Step 8 the server has
+used the resident `whisper-server`, which got **none** of them — only
+`validate_speech_energy` stood between noise and the model.
 
-## 2. Timer/reminder alert can be "lost" if it fires mid-speech
+**Fix:** whisper.cpp v1.9.1's server accepts `vad`, `vad_threshold`,
+`vad_min_speech_duration_ms` and `suppress_nst` as **per-request** multipart
+fields (confirmed in `examples/server/server.cpp`, ~line 596 and the wiring at
+~line 960). `_transcribe_via_server` now sends them, including the stricter
+conversation-mode threshold — the CLI path's behaviour, per request.
 
-**Problem:** if JARVIS is speaking when a timer/reminder fires, the alert can
-collide with or be swallowed by the in-progress reply and effectively be missed.
+**Coupling to know about:** `vad_model` is **launch-only**, so `start_jarvis.ps1`
+now passes `--vad-model`. If whisper-server is ever started without it while
+`whisper_vad_enabled` is true, every request fails. The two move together.
 
-**What exists:** on fire the client plays the alert sound then speaks the
-announcement (`announceFiredTimers` → `speakFiredTimers`), but `speakFiredTimers`
-bumps `speechRequestId` and resets `speechQueue`, which can clobber / be clobbered
-by current speech. The server returns each fired timer **exactly once**, so a
-dropped client-side alert is gone.
+## 2. Alert lost when it fires mid-speech — DONE (code)
 
-**Directions:** hold fired alerts in a client-side queue and play the sound +
-announcement only once current speech goes idle (chain onto `speechQueue` instead
-of resetting it), so the alert is deferred rather than lost. Keep the ⏰ card
-visible immediately regardless. Consider a max-defer so it still fires reasonably
-promptly, and dedupe if multiple accumulate.
+**Was:** `speakFiredTimers` bumped `speechRequestId` and reset `speechQueue`,
+invalidating the utterance in flight — so an alert either cut the reply off or was
+cut off by the next one. Either way it was gone, because the server hands each
+fired timer over exactly once.
 
-## 3. Desktop GUI panel listing existing timers/reminders
+**Fix:** fired alerts go into a queue (`mergeFiredAlerts`, deduped by id) and are
+released when the speech goes idle, or after **20 s** regardless so a long reply
+cannot swallow one (`shouldReleaseAlerts`, both pure and unit-tested in `core.js`).
+The ⏰ card still appears the instant it fires.
 
-**Problem:** no at-a-glance view of pending timers/reminders; only voice
-`list_timers`.
+## 3. Desktop panel of pending timers/reminders — DONE (code)
 
-**What exists:** `GET /api/timers` already returns the pending list (with fire
-times), and the client polls it every ~4 s. A Memory-panel-style dialog already
-exists as a UI pattern to mirror.
+A **Timers** control appears in the header when the tool loop is on, opening a
+dialog that mirrors the memory/speech panels. It reads the `pending` list the
+timer poll was already fetching and throwing away, so it costs no extra requests.
+Each row cancels through a new **`DELETE /api/timers/<id>`** — a thin route over
+the same `TimerStore.cancel` the `cancel_timer` tool uses, audited identically.
 
-**Directions:** a desktop-only panel showing pending timers/reminders with their
-fire times and a cancel button each (reuse the poll data; cancel via a new
-`DELETE /api/timers/<id>` or the existing tool). Explicitly **desktop/PC layout
-first**; mobile layout deferred. Longer-term/back-burner: a **native mobile app**
-instead of the browser — revisit once JARVIS is more fully functional.
+**Desktop only**, as decided: the toggle is hidden under 700 px. Mobile and the
+longer-term native app remain deferred.
 
-## 4. Default to Conversation Mode on entry; natural "conversation off" triggers
+## 4. Conversation Mode on entry + natural stop phrases — DONE (code)
 
-**Problem:** after pressing **Initiate**, the app should drop straight into
-Conversation Mode so you can just start talking. And turning it off should be
-sayable naturally, not only via the button.
+**Entry:** pressing Initiate now schedules conversation mode rather than leaving
+it for a second click. It cannot start inside that gesture — the greeting is
+playing and `startConversation` stops speech in progress, so it would cut the
+greeting off and open the mic onto JARVIS's own voice. It waits for the recognizer
+to be up and the speech to finish, gives up after 30 s, and stands down if the user
+touches anything first. Mic denial was already handled and still is.
 
-**What exists:** `isConversationStopCommand` (core.js) already matches "goodbye
-jarvis", "stop listening", "end conversation"; there's a conversation-mode toggle
-and start/stop plumbing. The Initiate press is a user gesture (also used to
-unlock audio), so auto-starting the mic there is feasible.
+**Stopping:** beyond the four fixed phrases, loose intent patterns match a stopping
+verb near what is being stopped ("turn off conversation mode", "exit conversation
+mode", "I need to go silent", "switch to text only", "close the microphone"),
+guarded so a *question* about the feature ("how do I turn off conversation mode?")
+is not treated as a request to use it. The fixed phrases keep their exact previous
+behaviour — a false negative matters more than a false positive here.
 
-**Directions:** auto-start Conversation Mode after Initiate once `voiceReady`
-(handle mic-permission denial gracefully; confirm we *want* the mic live on
-entry — it does mean listening immediately). Extend the stop-command matching to
-natural phrasings like "turn off conversation mode", "Jarvis, I need to go silent
-for a bit but keep going via text". Consider a matching approach robust to
-transcription variation (keyword/intent rather than exact strings), and a spoken
-confirmation when switching to text-only.
+---
+
+## On-device pass (GUItech-CORE) — the remaining work
+
+Everything above needs one run of the real stack. `.\start_jarvis.ps1 -Tools`
+(**not** `restart_app.ps1` — whisper-server must restart to pick up `--vad-model`).
+Hard-refresh the browser; assets are at `v=16`.
+
+1. **VAD.** Check `/tmp/jarvis_whisper.log` shows the VAD model loading and no
+   per-request errors. Then make the noise that used to trigger it — TV, music,
+   a fan — and confirm nothing is transcribed. Then confirm ordinary speech still
+   is, in both push-to-talk and conversation mode.
+2. **Entry.** Press Initiate. The greeting should play *complete*, then the mic
+   should open on its own. Deny mic permission once and confirm the graceful
+   fallback still works.
+3. **Stop phrases.** "Turn off conversation mode." Then restart it and try
+   "I need to go silent for a bit." Then ask "how do I turn off conversation
+   mode?" and confirm it does **not** stop.
+4. **Alert queuing.** Set a timer for ~40 s, then ask a question with a long
+   answer so JARVIS is mid-reply when it fires. The reply should finish, then the
+   alert should sound and speak. Nothing lost, nothing cut off.
+5. **Panel.** Set two timers, open **Timers**, confirm both appear with their fire
+   times, cancel one, confirm it goes and does not fire, and check the
+   `timer_cancelled` line in `data/tool_audit.jsonl`.
+6. **Phone.** Confirm the Timers control is absent and nothing else regressed.

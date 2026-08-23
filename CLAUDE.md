@@ -94,6 +94,37 @@ validation, serving with correct MIME, and a CSP update — do it as its own
 focused pass. **Also next: Stage 2 (reading the web — the first egress,
 prompt-injection defence).**
 
+## Backlog refinements (2026-08-23) — built, not yet verified on-device
+
+All four `docs/BACKLOG.md` items are implemented and green in the suite, but the
+stack was down that session, so **none is confirmed on hardware**. The on-device
+pass is written out at the bottom of `docs/BACKLOG.md` and is the next thing to do.
+
+- **Speech gate on the resident recognizer.** The VAD/suppression flags only ever
+  reached the `whisper-cli` path; the `whisper-server` the box actually uses got
+  none of them. It now receives `vad`, `vad_threshold`,
+  `vad_min_speech_duration_ms` and `suppress_nst` as per-request fields.
+  **`start_jarvis.ps1` now passes `--vad-model`, which is launch-only — start the
+  recognizer with it or every request fails.** Use `.\start_jarvis.ps1 -Tools`,
+  not `restart_app.ps1`, the first time.
+- **Fired alerts are queued**, released when speech goes idle or after 20 s, so an
+  alert can no longer cut off a reply or be cut off by one (it was lost for good
+  when that happened — the server hands each fired timer over exactly once).
+- **A desktop Timers panel** listing pending timers/reminders with per-row cancel,
+  through a new `DELETE /api/timers/<id>`. Hidden under 700 px by design.
+- **Conversation mode starts after Initiate** (once the greeting finishes — it
+  cannot start inside the gesture without cutting the greeting off), and can be
+  ended in far more ways, guarded so a question about the feature is not a command.
+
+**Test tooling now exists on this box.** WSL has `nodejs`, `python3-pytest` and
+`python3-venv` (installed 2026-08-23). Run the full suite there:
+`wsl -d Ubuntu -e bash -c "cd '/mnt/d/Claude Projects/JARVIS AI Assistant' && python3 -m pytest -q && node tests/test_core.js"` — **222 pytest + the node
+suite, all green**. Windows Python also has pytest but skips 5 POSIX-only tests
+(`%-I` was glibc-only and is now built by hand, so the rest run anywhere).
+
+**Static assets are at `v=16`** — bump `?v=` in `static/index.html` whenever
+`app.js`, `core.js`, or `styles.css` changes, or browsers serve stale copies.
+
 ## The dedicated server (this machine)
 
 - Ryzen 7 7800X3D / **RTX 3060 12 GB** / 64 GB DDR5 / 4 TB NVMe. Fresh Windows 11,
