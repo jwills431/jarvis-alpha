@@ -1318,6 +1318,60 @@ class TranscriptionTests(unittest.TestCase):
                 "thank you",
             )
 
+    def _capture_server_request(self, config, **kwargs):
+        """Run the resident-recognizer path and return the multipart body it sent."""
+        sent = {}
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b"hello there"
+
+        def fake_urlopen(request, timeout=None):
+            sent["body"] = request.data.decode("utf-8", errors="replace")
+            return _Response()
+
+        with patch("jarvis.transcription.runtime_ready", return_value=True), patch(
+            "jarvis.transcription.urllib.request.urlopen", side_effect=fake_urlopen
+        ):
+            transcribe(config, make_wav(amplitude=2000), **kwargs)
+        return sent["body"]
+
+    def _field(self, body, name):
+        """The value of one multipart form field, or None if it was not sent."""
+        marker = f'name="{name}"\r\n\r\n'
+        if marker not in body:
+            return None
+        return body.split(marker, 1)[1].split("\r\n", 1)[0]
+
+    def test_server_path_applies_vad_and_non_speech_suppression(self):
+        # The resident recognizer used to get none of this, so background noise
+        # reached the model as if it were speech.
+        body = self._capture_server_request(Config(whisper_server_url="http://127.0.0.1:8088"))
+        self.assertEqual(self._field(body, "vad"), "true")
+        self.assertEqual(self._field(body, "vad_threshold"), "0.5")
+        self.assertEqual(self._field(body, "vad_min_speech_duration_ms"), "250")
+        self.assertEqual(self._field(body, "suppress_nst"), "true")
+
+    def test_server_path_raises_the_threshold_in_conversation_mode(self):
+        body = self._capture_server_request(
+            Config(whisper_server_url="http://127.0.0.1:8088"), conversation_mode=True
+        )
+        self.assertEqual(self._field(body, "vad_threshold"), "0.6")
+
+    def test_server_path_omits_vad_when_it_is_disabled(self):
+        body = self._capture_server_request(
+            Config(whisper_server_url="http://127.0.0.1:8088", whisper_vad_enabled=False)
+        )
+        self.assertIsNone(self._field(body, "vad"))
+        self.assertIsNone(self._field(body, "vad_threshold"))
+        self.assertEqual(self._field(body, "suppress_nst"), "true")
+
     def test_transcription_timeout_is_distinct_and_deletes_audio(self):
         observed_path = None
 

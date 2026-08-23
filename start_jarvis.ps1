@@ -50,6 +50,7 @@ echo "app health: $(curl -s http://127.0.0.1:8787/api/health)"
 #    model every time (~0.9 s); keeping it resident cuts that to ~0.4-0.6 s.
 setsid bash -c '/home/jaydubya/jarvis/whisper.cpp/build/bin/whisper-server \
   --model /home/jaydubya/jarvis/models/whisper/ggml-base.en.bin \
+  --vad-model /home/jaydubya/jarvis/models/whisper/ggml-silero-v6.2.0.bin \
   --host 127.0.0.1 --port 8088 --threads 10 --no-gpu \
   > /tmp/jarvis_whisper.log 2>&1' < /dev/null &
 for i in $(seq 1 15); do

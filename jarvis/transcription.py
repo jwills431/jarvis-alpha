@@ -67,15 +67,37 @@ def runtime_ready(config: Config) -> bool:
     )
 
 
-def _transcribe_via_server(config: Config, data: bytes) -> str:
+def _transcribe_via_server(config: Config, data: bytes, *, conversation_mode: bool = False) -> str:
     """Transcribe through a resident whisper-server over loopback HTTP.
 
     Keeps the model loaded between utterances. Only the captured audio and the
     returned text cross this boundary, and only on loopback; the audio is never
     written to disk on this path.
+
+    The recognizer gets the same speech gating as the whisper-cli path. VAD is
+    enabled per request so conversation mode can raise the threshold, but the
+    Silero model itself is a launch-time setting: whisper-server must be started
+    with `--vad-model`, as `start_jarvis.ps1` does. Without it the server has no
+    VAD model to load and every request fails, so the two move together.
     """
     boundary = uuid.uuid4().hex
-    fields = {"temperature": "0.0", "response_format": "text", "language": "en", "no_timestamps": "true"}
+    fields = {
+        "temperature": "0.0",
+        "response_format": "text",
+        "language": "en",
+        "no_timestamps": "true",
+        "suppress_nst": "true",
+    }
+    if config.whisper_vad_enabled:
+        fields.update({
+            "vad": "true",
+            "vad_threshold": str(
+                config.whisper_conversation_vad_threshold
+                if conversation_mode
+                else config.whisper_vad_threshold
+            ),
+            "vad_min_speech_duration_ms": str(config.whisper_vad_min_speech_ms),
+        })
     parts: list[bytes] = []
     for name, value in fields.items():
         parts.append(
@@ -141,7 +163,9 @@ def transcribe(config: Config, data: bytes, *, conversation_mode: bool = False) 
     # Resident recognizer: the model stays loaded, so no per-utterance reload and
     # no temp file. Same validation before, same transcript checks after.
     if config.whisper_server_url:
-        return validate_transcript(_transcribe_via_server(config, data))
+        return validate_transcript(
+            _transcribe_via_server(config, data, conversation_mode=conversation_mode)
+        )
     temp_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(prefix="jarvis-stt-", suffix=".wav", delete=False) as audio_file:
