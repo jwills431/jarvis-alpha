@@ -1299,6 +1299,13 @@ class TranscriptionTests(unittest.TestCase):
         with self.assertRaises(NoSpeechDetected):
             validate_transcript("Thanks for watching!")
 
+    def test_rejects_lone_you_hallucination(self):
+        # On-device, a 19 s clip of music came back from Whisper as "you" and became a turn.
+        for phantom in ("you", "You.", " you? "):
+            with self.assertRaises(NoSpeechDetected):
+                validate_transcript(phantom)
+        self.assertEqual(validate_transcript("you there?"), "you there?")
+
     def test_accepts_standalone_courtesy_phrase(self):
         self.assertEqual(validate_transcript("Thank you."), "Thank you.")
 

@@ -30,6 +30,10 @@ MUSIC_SYMBOLS = frozenset("♪♫♬♩🎵🎶")
 NON_SPEECH_CAPTIONS = "music|music playing|instrumental music|applause|laughter|silence|noise|background noise|inaudible"
 CANNED_NON_SPEECH_TRANSCRIPTS = (
     re.compile(r"^(?:thanks|thank you)\s+for\s+watching(?:\s+this\s+video)?[.!?]*$", re.IGNORECASE),
+    # Whisper's stock output for audio with no real speech. On-device (2026-09-10) a
+    # 19 s clip of music with 0.3 s of VAD "speech" came back as "you" and reached
+    # the model as a turn. A lone "you" is never a request; "thank you" is, so stays.
+    re.compile(r"^you[.!?]*$", re.IGNORECASE),
 )
 
 

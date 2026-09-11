@@ -115,7 +115,27 @@ Hard-refresh the browser; assets are at `v=16`.
   prompt, stale-refusal history filter, bare/dotted/just-passed time handling. **PASS
   on-device (23:31):** a reminder set through PAIR fired on time, and a second alert
   waited out a long reply with sound and speech together. Detail in `CLAUDE.md`.
-- Tests 2 (entry), 3 (stop phrases), 5 (panel), 6 (phone): **not yet run.**
+2. **Entry — PASS (23:40).** Initiate played the greeting in full, then the mic opened
+   on its own; with mic permission denied it fell back to push-to-talk and text.
+3. **Stop phrases — PASS.** "Turn off conversation mode" and "I need to go silent for a
+   bit" both stopped it; "how do I turn off conversation mode?" did not.
+5. **Timers panel — PASS (23:45).** Two timers listed with fire times; the 10-minute one
+   cancelled from the panel (`timer_cancelled` audited, store status `cancelled`); the
+   5-minute one fired on time at 23:50, and the cancelled one never fired (checked at
+   23:56, past its 23:55:15 due time: no `timer_fired`, `fired_at` null).
+6. **Phone — PASS.** Timers control hidden under 700 px; chat and voice worked.
+- **Music started after conversation mode was on — interferes (23:46–23:50).** Music-only
+  pickups were still rejected (1.2–1.8 s clips), but one recording was held open
+  **19.3 s** and contained only **0.31 s** of VAD speech — and it still transcribed and
+  went to chat as a turn. Another ran 8.7 s for 5.5 s of speech. The background level
+  was measured before the music started, so the energy detector cannot tell it from
+  speech. Durable fix: browser-side VAD (below). Possible stopgap: reject a turn whose
+  VAD speech is a tiny share of a long clip (whisper-server's verbose_json segments
+  would give the speech coverage), rather than raising the minimum speech length,
+  which would cost short answers like "yes". **The false turn's transcript was "you"**
+  — Whisper's stock output for non-speech — so a lone "you" is now rejected as a canned
+  non-speech transcript (`transcription.CANNED_NON_SPEECH_TRANSCRIPTS`); "thank you"
+  is still accepted. That stops this instance, not the detector problem behind it.
 
 ---
 
