@@ -31,7 +31,7 @@ Typed messages also pause Conversation mode until the generated and spoken reply
 - Audio windows are supplied by the browser's local Web Audio pipeline.
 - The calibrated baseline is the 80th percentile of observed room levels, avoiding an unrealistically quiet estimate during a brief dip in fan noise.
 - Initial start threshold: the greater of 0.008 RMS or 2.4 times the adaptive noise floor.
-- End threshold: the greater of 0.005 RMS or 1.5 times the adaptive noise floor.
+- End threshold: the greater of 0.005 RMS or 1.5 times the adaptive noise floor, raised to 1.3 times the 90th percentile of the ~1.2 seconds of background heard just before the speech started (capped at 0.9 times the start threshold). Without that, a room that got louder after calibration — music by the mic, a TV — never dropped below the end threshold, so the turn never ended (found on-device 2026-09-10).
 - Start confirmation: three consecutive windows.
 - End confirmation: approximately 0.9 seconds below the end threshold.
 - Pre-roll: approximately 0.35 seconds.

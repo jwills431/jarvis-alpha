@@ -75,7 +75,9 @@ const {
   shouldConsiderAutoMemory,
   shouldReleaseAlerts,
   speechBoundary,
+  speechChunkMaxChars,
   speechChunkMinChars,
+  conversationEndThreshold,
   trimConversationHistory,
   unsupportedActionResponse,
 } = globalThis.JarvisCore;
@@ -91,7 +93,8 @@ let speechEnabled = true;
 let toolsEnabled = false;
 let timerPollHandle = null;
 let timerPollInFlight = false;
-// Fired alerts wait here for a gap in the speech rather than interrupting it.
+// Fired alerts wait here until the reply is completely finished — text, rendering
+// and playback — and then the sound and the announcement play together.
 // speakFiredTimers invalidates the in-flight utterance, so announcing during a
 // reply used to cut the reply off — or be cut off by the next one, losing an
 // alert the server had already handed over for the only time.
@@ -1181,9 +1184,18 @@ function queueFiredTimers(list) {
   void flushFiredAlerts();
 }
 
+// A reply is in progress from the moment it is requested until its last audio has
+// played. speechActive alone is not enough: it can dip to false in a gap between
+// sentences while the text is still streaming, and announcing there would drop the
+// rest of the reply's speech. Send stays disabled for exactly the chat request.
+function replyInProgress() {
+  return sendEl.disabled || speechActive || pendingSpeech.size > 0;
+}
+
 async function flushFiredAlerts() {
   if (alertFlushInFlight) return;
-  if (!shouldReleaseAlerts(pendingAlerts, speechActive, Date.now())) {
+  const busy = replyInProgress();
+  if (!shouldReleaseAlerts(pendingAlerts, busy, Date.now())) {
     if (pendingAlerts.length === 0 && alertFlushHandle !== null) {
       clearInterval(alertFlushHandle);
       alertFlushHandle = null;
@@ -1193,6 +1205,10 @@ async function flushFiredAlerts() {
   const batch = pendingAlerts.splice(0, pendingAlerts.length).map((entry) => entry.fired);
   alertFlushInFlight = true;
   try {
+    // Released while still busy means the safety ceiling tripped. Stop the speech
+    // outright first: the reply's audio is already scheduled on the audio clock, so
+    // otherwise the sound would play now and the words only after all of it.
+    if (busy) await stopSpeech('Speech stopped for a timer alert.');
     await announceFiredTimers(batch);
   } finally {
     alertFlushInFlight = false;
@@ -1643,7 +1659,8 @@ function feedSpeech(stream, value, final = false) {
   if (!stream || stream.requestId !== speechRequestId) return;
   stream.buffer += value;
   while (stream.buffer) {
-    const boundary = speechBoundary(stream.buffer, final, speechChunkMinChars(stream.chunks));
+    const boundary = speechBoundary(
+      stream.buffer, final, speechChunkMinChars(stream.chunks), speechChunkMaxChars(stream.chunks));
     if (boundary < 0) break;
     const chunk = stream.buffer.slice(0, boundary).trim();
     stream.buffer = stream.buffer.slice(boundary).trimStart();
@@ -1858,9 +1875,20 @@ function resetConversationDetector(message = 'Listening locally. Speak naturally
   state.highWindows = 0;
   state.silenceMs = 0;
   state.utteranceMs = 0;
+  state.ambientLevels = [];
   state.calibrationLevels = [];
   state.calibratingUntil = performance.now() + 1000;
   setConversationState('active', message);
+}
+
+// Roughly the last 1.2 s of levels heard while nobody was speaking, from which the
+// end-of-turn threshold is measured when speech starts.
+const CONVERSATION_AMBIENT_MS = 1200;
+
+function rememberAmbientLevel(state, level, durationMs) {
+  state.ambientLevels.push(level);
+  const keep = Math.max(1, Math.ceil(CONVERSATION_AMBIENT_MS / durationMs));
+  if (state.ambientLevels.length > keep) state.ambientLevels.splice(0, state.ambientLevels.length - keep);
 }
 
 function processConversationAudio(state, audioEvent) {
@@ -1870,6 +1898,7 @@ function processConversationAudio(state, audioEvent) {
   const durationMs = chunk.length / state.context.sampleRate * 1000;
   if (performance.now() < state.calibratingUntil) {
     state.calibrationLevels.push(level);
+    rememberAmbientLevel(state, level, durationMs);
     return;
   }
   if (state.calibrationLevels.length) {
@@ -1878,19 +1907,22 @@ function processConversationAudio(state, audioEvent) {
     state.calibrationLevels = [];
   }
   const startThreshold = Math.max(0.008, state.noiseFloor * 2.4);
-  const stopThreshold = Math.max(0.005, state.noiseFloor * 1.5);
   if (!state.speaking) {
     state.preRoll.push(chunk);
     state.preRollSamples += chunk.length;
     while (state.preRollSamples > state.context.sampleRate * 0.35 && state.preRoll.length > 1) {
       state.preRollSamples -= state.preRoll.shift().length;
     }
+    rememberAmbientLevel(state, level, durationMs);
     if (level >= startThreshold) state.highWindows++;
     else {
       state.highWindows = 0;
       state.noiseFloor = state.noiseFloor * 0.98 + level * 0.02;
     }
     if (state.highWindows >= 3) {
+      // The trigger windows are the speech itself, so leave them out of the background.
+      state.endThreshold = conversationEndThreshold(
+        state.noiseFloor, state.ambientLevels.slice(0, -state.highWindows), startThreshold);
       state.speaking = true;
       state.chunks = state.preRoll;
       state.utteranceMs = state.preRollSamples / state.context.sampleRate * 1000;
@@ -1903,7 +1935,7 @@ function processConversationAudio(state, audioEvent) {
   }
   state.chunks.push(chunk);
   state.utteranceMs += durationMs;
-  state.silenceMs = level <= stopThreshold ? state.silenceMs + durationMs : 0;
+  state.silenceMs = level <= state.endThreshold ? state.silenceMs + durationMs : 0;
   if ((state.utteranceMs >= 400 && state.silenceMs >= 900) || state.utteranceMs >= 30000) {
     state.processing = true;
     state.speaking = false;
@@ -1955,7 +1987,7 @@ async function startConversation() {
       stream, context, source, processor, silence,
       noiseFloor: 0.002, calibrationLevels: [], calibratingUntil: performance.now() + 2000,
       processing: false, speaking: false, chunks: [], preRoll: [], preRollSamples: 0,
-      highWindows: 0, silenceMs: 0, utteranceMs: 0,
+      highWindows: 0, silenceMs: 0, utteranceMs: 0, ambientLevels: [], endThreshold: 0.005,
     };
     processor.onaudioprocess = (audioEvent) => processConversationAudio(state, audioEvent);
     source.connect(processor);

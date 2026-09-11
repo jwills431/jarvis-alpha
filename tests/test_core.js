@@ -3,6 +3,8 @@ const assert = require('assert');
 require('../static/core.js');
 
 const {
+  ALERT_MAX_DEFER_MS,
+  conversationEndThreshold,
   countUnsupportedScriptCharacters,
   formatConversationTranscript,
   formatLearnMemory,
@@ -21,8 +23,10 @@ const {
   shouldConsiderAutoMemory,
   shouldReleaseAlerts,
   speechBoundary,
+  speechChunkMaxChars,
   speechChunkMinChars,
   SPEECH_CHUNK_RAMP,
+  SPEECH_FIRST_MAX_CHARS,
   SPEECH_MIN_CHARS,
   SPEECH_MAX_CHARS,
   trimConversationHistory,
@@ -289,9 +293,13 @@ assert.strictEqual(shouldReleaseAlerts(queue, false, t0), true);
 assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 1000), false);
 
 // Still speaking past the ceiling: release anyway rather than lose it. The oldest
-// entry governs, so a newer alert cannot keep resetting the clock.
-assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 19_999), false);
-assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 20_000), true);
+// entry governs, so a newer alert cannot keep resetting the clock. The ceiling is a
+// safety net for a stuck speaking state: an ordinary long reply must finish first
+// (on-device, a 20 s ceiling tripped mid-reply and split the sound from the words).
+assert.ok(ALERT_MAX_DEFER_MS >= 60_000);
+assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 20_000), false);
+assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + ALERT_MAX_DEFER_MS - 1), false);
+assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + ALERT_MAX_DEFER_MS), true);
 assert.strictEqual(shouldReleaseAlerts(queue, true, t0 + 1000, 500), true);
 
 // A malformed entry must not strand the queue forever.
@@ -337,4 +345,48 @@ assert.strictEqual(speechBoundary('Timer set.', false, 30), -1);
 assert.strictEqual(speechBoundary('Timer set.', true, 30), 10);
 // A run with no sentence end at all breaks at the cap rather than growing forever.
 assert.ok(speechBoundary('word '.repeat(80), false, 30) <= SPEECH_MAX_CHARS);
+
+// The first chunk has a ceiling of its own: a long opening sentence breaks at a
+// clause instead of waiting for its full stop, because that chunk renders while the
+// model still holds the GPU (measured ~2.4x slower: 153 chars, 3.7 s alone, 8.8 s shared).
+assert.strictEqual(speechChunkMaxChars(0), SPEECH_FIRST_MAX_CHARS);
+assert.strictEqual(speechChunkMaxChars(1), SPEECH_MAX_CHARS);
+assert.strictEqual(speechChunkMaxChars(undefined), SPEECH_FIRST_MAX_CHARS);
+assert.ok(SPEECH_FIRST_MAX_CHARS > SPEECH_CHUNK_RAMP[0] && SPEECH_FIRST_MAX_CHARS < SPEECH_MAX_CHARS);
+assert.ok(renderCost(SPEECH_FIRST_MAX_CHARS) * 2.4 <= 4, 'first chunk must render within ~4 s on a shared GPU');
+const opening = 'A jet engine pulls air in at the front, squeezes it hard with a compressor, then mixes it with fuel and ignites it.';
+const clauseCut = speechBoundary(opening, false, 30, SPEECH_FIRST_MAX_CHARS);
+assert.strictEqual(clauseCut, opening.slice(0, SPEECH_FIRST_MAX_CHARS).lastIndexOf(', ') + 1);
+assert.ok(clauseCut >= 30 && clauseCut <= SPEECH_FIRST_MAX_CHARS);
+// A full stop past the ceiling does not win over the clause break inside it.
+assert.ok(speechBoundary(opening, true, 30, SPEECH_FIRST_MAX_CHARS) < opening.length);
+// A short opening sentence still ends at its own full stop.
+const shortOpening = 'Certainly, sir, here is how it works. A jet engine pulls air in at the front.';
+assert.strictEqual(speechBoundary(shortOpening, false, 30, SPEECH_FIRST_MAX_CHARS), shortOpening.indexOf('works.') + 'works.'.length);
+// No clause mark in range: break between words, never inside one.
+const unpunctuated = 'word '.repeat(30);
+const wordCut = speechBoundary(unpunctuated, false, 30, SPEECH_FIRST_MAX_CHARS);
+assert.ok(wordCut >= 30 && wordCut <= SPEECH_FIRST_MAX_CHARS);
+assert.strictEqual(unpunctuated[wordCut - 1], ' ');
+// Under the ceiling with no full stop yet: keep waiting for more text.
+assert.strictEqual(speechBoundary(opening.slice(0, 70), false, 30, SPEECH_FIRST_MAX_CHARS), -1);
 console.log('speech chunking ramp: ok');
+
+// ---------- conversation end-of-turn threshold ----------
+// Too little background heard, or a quiet one: the calibrated rule stands.
+assert.strictEqual(conversationEndThreshold(0.002, [], 0.008), 0.005);
+assert.strictEqual(conversationEndThreshold(0.01, [0.001, 0.001], 0.024), 0.015);
+assert.strictEqual(conversationEndThreshold(0.01, Array(10).fill(0.001), 0.024), 0.015);
+// Malformed levels are ignored rather than trusted.
+assert.strictEqual(conversationEndThreshold(0.002, [NaN, -1, 'x', 0.001], 0.008), 0.005);
+// The room is louder than calibration measured (music by the mic): the turn ends
+// when the level falls back to that background, not to the stale quiet floor.
+const music = [0.012, 0.013, 0.014, 0.015, 0.016, 0.012, 0.013, 0.014, 0.015, 0.016];
+const musicEnd = conversationEndThreshold(0.01, music, 0.024);
+assert.ok(Math.abs(musicEnd - 0.016 * 1.3) < 1e-9);
+assert.ok(musicEnd > 0.015);
+// Never at or above the start threshold, or barely-audible speech would end the turn.
+const nearStart = conversationEndThreshold(0.002, Array(10).fill(0.0079), 0.008);
+assert.ok(Math.abs(nearStart - 0.008 * 0.9) < 1e-9);
+assert.ok(nearStart < 0.008);
+console.log('conversation end threshold: ok');

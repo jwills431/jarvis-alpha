@@ -274,8 +274,14 @@
   // A timer alert must not cut off a reply that is already being spoken, but the
   // server hands each fired timer over exactly once — so an alert dropped here is
   // gone for good. These two decide when a queued alert may be released; app.js
-  // owns the sound and the announcement.
-  const ALERT_MAX_DEFER_MS = 20000;
+  // owns the sound and the announcement, and plays them together.
+  //
+  // The ceiling is a safety net for a stuck speaking state, not a normal path. It
+  // was 20 s, and on-device (2026-09-10) an ordinary long reply outlasted that: the
+  // sound played mid-reply while the words queued behind audio already scheduled.
+  // Now an ordinary reply always finishes first; if the ceiling does trip, app.js
+  // stops the speech before announcing, so the two are never split.
+  const ALERT_MAX_DEFER_MS = 120000;
 
   function mergeFiredAlerts(queued, incoming, now) {
     const merged = Array.isArray(queued) ? queued.slice() : [];
@@ -328,6 +334,15 @@
   const SPEECH_MIN_CHARS = 90;
   const SPEECH_MAX_CHARS = 220;
 
+  // The first chunk also has a ceiling of its own. The ramp's 30 characters is only
+  // a minimum — the chunk still runs to the first sentence end past it, and the
+  // model's opening sentence is often 110-150 characters. Worse, that chunk renders
+  // while llama-server is still writing the reply on the same GPU, and the sharing
+  // slows Fish about 2.4x (measured 2026-09-10: 153 characters took 3.7 s alone,
+  // 8.8 s alongside a generation). The first word then came 6-9 s in, after the text
+  // had finished. Past this ceiling the first chunk breaks at a clause instead.
+  const SPEECH_FIRST_MAX_CHARS = 80;
+
   // How many characters the nth chunk of one reply must reach before it may be
   // spoken. Beyond the ramp it settles at the steady-state minimum.
   function speechChunkMinChars(index) {
@@ -335,8 +350,15 @@
     return step < SPEECH_CHUNK_RAMP.length ? SPEECH_CHUNK_RAMP[step] : SPEECH_MIN_CHARS;
   }
 
-  function speechBoundary(text, final, minChars = SPEECH_MIN_CHARS) {
-    for (let index = 0; index < text.length; index++) {
+  // How long the nth chunk may grow before it is broken at a clause or a word.
+  function speechChunkMaxChars(index) {
+    const step = Number.isInteger(index) && index > 0 ? index : 0;
+    return step === 0 ? SPEECH_FIRST_MAX_CHARS : SPEECH_MAX_CHARS;
+  }
+
+  function speechBoundary(text, final, minChars = SPEECH_MIN_CHARS, maxChars = SPEECH_MAX_CHARS) {
+    // Only sentence ends inside the ceiling count; past it, the clause break below wins.
+    for (let index = 0; index < text.length && index < maxChars; index++) {
       const character = text[index];
       let end = -1;
       if (character === '\n') end = index + 1;
@@ -345,8 +367,8 @@
       // short sentence is spoken together with the text that follows it.
       if (end >= 0 && end >= minChars) return end;
     }
-    if (text.length >= SPEECH_MAX_CHARS) {
-      const window = text.slice(0, SPEECH_MAX_CHARS);
+    if (text.length >= maxChars) {
+      const window = text.slice(0, maxChars);
       let boundary = Math.max(window.lastIndexOf(', '), window.lastIndexOf('; '), window.lastIndexOf(': '));
       if (boundary < minChars) boundary = window.lastIndexOf(' ');
       if (boundary >= minChars) return boundary + 1;
@@ -355,9 +377,34 @@
     return final ? text.length : -1;
   }
 
+  // Conversation mode ends a turn after ~0.9 s below an end threshold. Derived only
+  // from the calibrated floor, that threshold goes stale the moment the room gets
+  // louder — music started, a phone brought up to the mic — and the turn then never
+  // ends, because nothing falls below 1.5x a floor measured in quiet. So it is also
+  // measured from the background heard just before the speech began: the turn ends
+  // when the level falls back to that. `ambientLevels` excludes the trigger windows.
+  const CONVERSATION_MIN_END_LEVEL = 0.005;
+  const CONVERSATION_MIN_AMBIENT_WINDOWS = 4;
+
+  function conversationEndThreshold(noiseFloor, ambientLevels, startThreshold) {
+    const floor = Number.isFinite(noiseFloor) && noiseFloor > 0 ? noiseFloor : 0;
+    const calibrated = Math.max(CONVERSATION_MIN_END_LEVEL, floor * 1.5);
+    const levels = Array.isArray(ambientLevels)
+      ? ambientLevels.filter((level) => Number.isFinite(level) && level >= 0)
+      : [];
+    if (levels.length < CONVERSATION_MIN_AMBIENT_WINDOWS) return calibrated;
+    const ordered = levels.slice().sort((left, right) => left - right);
+    const ambient = ordered[Math.floor((ordered.length - 1) * 0.9)] * 1.3;
+    // Kept below the start threshold, or speech that only just cleared it would
+    // count as silence and end the turn after 0.9 s.
+    const ceiling = Number.isFinite(startThreshold) && startThreshold > 0 ? startThreshold * 0.9 : ambient;
+    return Math.max(calibrated, Math.min(ambient, ceiling));
+  }
+
   root.JarvisCore = Object.freeze({
     ALERT_MAX_DEFER_MS,
     SPEECH_CHUNK_RAMP,
+    SPEECH_FIRST_MAX_CHARS,
     SPEECH_MAX_CHARS,
     SPEECH_MIN_CHARS,
     ALERT_SOUND_IDS,
@@ -380,7 +427,9 @@
     shouldConsiderAutoMemory,
     shouldReleaseAlerts,
     speechBoundary,
+    speechChunkMaxChars,
     speechChunkMinChars,
+    conversationEndThreshold,
     trimConversationHistory,
   });
 })(globalThis);
