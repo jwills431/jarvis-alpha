@@ -36,8 +36,9 @@ cut off by the next one. Either way it was gone, because the server hands each
 fired timer over exactly once.
 
 **Fix:** fired alerts go into a queue (`mergeFiredAlerts`, deduped by id) and are
-released when the speech goes idle, or after **20 s** regardless so a long reply
-cannot swallow one (`shouldReleaseAlerts`, both pure and unit-tested in `core.js`).
+released when the speech goes idle, or after a ceiling regardless so a stuck
+speaking state cannot swallow one (**20 s** originally; raised to 120 s with speech
+stopped first on 2026-09-10, after the 20 s ceiling split the sound from the words) (`shouldReleaseAlerts`, both pure and unit-tested in `core.js`).
 The ⏰ card still appears the instant it fires.
 
 ## 3. Desktop panel of pending timers/reminders — DONE (code)
@@ -93,11 +94,39 @@ Hard-refresh the browser; assets are at `v=16`.
    `timer_cancelled` line in `data/tool_audit.jsonl`.
 6. **Phone.** Confirm the Timers control is absent and nothing else regressed.
 
+### Results of the first on-device run (2026-09-10)
+
+1. **VAD — PASS** on the server (noise and music-only clips rejected, speech over
+   music clean). The *browser* end-of-turn detector held the turn open with music at
+   the mic → fixed with `conversationEndThreshold`. **Re-test (23:00): much better,
+   not perfect** — 4 of 6 spoken turns ended ~1 s after speech (was: never, until the
+   phone moved away); music-only pickups mostly 1–3 s and rejected. Two turns ran
+   7–13 s long when the music got louder mid-turn — the limit of an energy detector.
+   **Durable fix: a browser-side VAD** (e.g. Silero via onnxruntime-web, vendored —
+   ~2 MB, needs a CSP review). Untested: music started *after* conversation mode is on.
+4. **Alert queuing — PARTIAL.** Fired once, nothing lost, but the 20 s ceiling split
+   the sound (mid-reply) from the words (after the reply) → fixed. **Re-test PASS
+   (22:51):** a 1-minute timer fired mid-reply; sound and words came together once the
+   reply finished (announcement 29 s after firing — past the old 20 s ceiling).
+- **New: first word only after the text finished** — GPU sharing between
+  llama-server and Fish (~2.4× slowdown) plus a long first chunk → fixed with
+  `SPEECH_FIRST_MAX_CHARS`; **re-test**. Full detail in `CLAUDE.md`.
+- **New: fabricated reminders, then refusals on qwen3.5** → claim guard, tool-aware
+  prompt, stale-refusal history filter, bare/dotted/just-passed time handling. **PASS
+  on-device (23:31):** a reminder set through PAIR fired on time, and a second alert
+  waited out a long reply with sound and speech together. Detail in `CLAUDE.md`.
+- Tests 2 (entry), 3 (stop phrases), 5 (panel), 6 (phone): **not yet run.**
+
 ---
 
 ## Later — evaluated, deliberately parked
 
 ### NVIDIA PAIR (Personal AI Router) — added 2026-09-10
+
+**Status update, same day: un-parked and in trial.** The "revisit when" condition
+below turned out to be met already — the 3060 is shared by llama-server and Fish,
+measured at a ~2.4× mutual slowdown — and Joseph has TOWER (4060 Ti) on PAIR.
+Plan and decisions are in `CLAUDE.md` ("On-device pass + fixes (2026-09-10)").
 
 **What it is:** NVIDIA's free, open-source (Apache-2.0) beta, released 2026-09-03.
 It pairs machines on the LAN (mDNS discovery, PIN pairing, mTLS between nodes) and

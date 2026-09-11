@@ -107,9 +107,10 @@ pass is written out at the bottom of `docs/BACKLOG.md` and is the next thing to 
   **`start_jarvis.ps1` now passes `--vad-model`, which is launch-only — start the
   recognizer with it or every request fails.** Use `.\start_jarvis.ps1 -Tools`,
   not `restart_app.ps1`, the first time.
-- **Fired alerts are queued**, released when speech goes idle or after 20 s, so an
-  alert can no longer cut off a reply or be cut off by one (it was lost for good
-  when that happened — the server hands each fired timer over exactly once).
+- **Fired alerts are queued**, released once the reply is completely finished (a
+  2-minute ceiling is only a safety net), so an alert can no longer cut off a reply
+  or be cut off by one (it was lost for good when that happened — the server hands
+  each fired timer over exactly once). *Originally a 20 s ceiling — see 2026-09-10.*
 - **A desktop Timers panel** listing pending timers/reminders with per-row cancel,
   through a new `DELETE /api/timers/<id>`. Hidden under 700 px by design.
 - **Conversation mode starts after Initiate** (once the greeting finishes — it
@@ -122,8 +123,121 @@ pass is written out at the bottom of `docs/BACKLOG.md` and is the next thing to 
 suite, all green**. Windows Python also has pytest but skips 5 POSIX-only tests
 (`%-I` was glibc-only and is now built by hand, so the rest run anywhere).
 
-**Static assets are at `v=16`** — bump `?v=` in `static/index.html` whenever
+**Static assets are at `v=19`** — bump `?v=` in `static/index.html` whenever
 `app.js`, `core.js`, or `styles.css` changes, or browsers serve stale copies.
+
+## On-device pass + fixes (2026-09-10)
+
+Stack brought up with `.\start_jarvis.ps1 -Tools` and tested over RDP. Results:
+
+- **VAD on whisper-server: PASS.** Loads with `--vad-model`, no per-request errors;
+  synthetic noise and music-only clips are rejected (`422 no_speech_detected`), and
+  speech over music transcribed cleanly.
+- **Timer + reminder: fire exactly once**, sound then spoken announcement.
+- **Found 1 — conversation turn never ended with music at the mic.** The browser's
+  end-of-turn threshold came only from the calibrated (quiet) floor. Fixed:
+  `conversationEndThreshold` in `core.js` also measures the ~1.2 s of background just
+  before speech. See `docs/CONVERSATION_MODE.md`.
+- **Found 2 — alert sound split from its words.** The 20 s ceiling tripped during an
+  ordinary long reply: the sound played mid-reply and the words queued behind audio
+  already scheduled on the Web Audio clock (and bumping `speechRequestId` could drop
+  unsent reply chunks). Fixed: `replyInProgress()` in `app.js` holds sound + words
+  until text, rendering and playback are all done; ceiling now 120 s, and if it
+  trips the speech is stopped first.
+- **Found 3 — speech started only after the text finished.** Root cause, measured:
+  **llama-server and Fish share the RTX 3060 and slow each other ~2.4×** — a
+  153-char Fish render took 3.7 s alone vs **8.8 s during a generation** (llama fell
+  to ~170 chars/s). The first speech chunk renders exactly then, and it was a whole
+  110–150-char sentence, so first word came 6–9 s in. Fixed: `SPEECH_FIRST_MAX_CHARS`
+  (80) — the first chunk breaks at a clause past 80 chars. Later chunks unchanged.
+  On one GPU a very long reply may still pause briefly after the first phrase.
+- **All three fixes are green in the suite (222 pytest + node) but need re-testing
+  on-device.** Tests 2, 3, 5, 6 of the `docs/BACKLOG.md` pass were not yet run.
+
+**PAIR is now being trialled to remove the GPU sharing** (see `docs/BACKLOG.md`).
+Joseph's PAIR cluster: GUITECH-CORE (this box, 3060), GUITECH-TOWER (192.168.7.85,
+4060 Ti — also the usual RDP client), GUITECH-MOBILE (3070 Laptop), and the Intel
+iMac Pro (LM Studio can't install there — no Intel-Mac build; Ollama is CPU-only).
+Decisions: route the LLM to **qwen3.5:9b on TOWER** via PAIR's loopback endpoint
+`127.0.0.1:11434` (reachable from WSL); Ollama switched **off** on CORE and the iMac
+in PAIR (PAIR's routing ignores GPU model, free VRAM and warmness, and cannot pin
+a node); JARVIS to **fall back to local llama-server** when PAIR/TOWER is down;
+`OLLAMA_KEEP_ALIVE` set on TOWER (PAIR is a user app, not a service — set a user
+env var and restart PAIR + Ollama); Qwen 3.5 thinking must be off.
+
+**PAIR trial results (measured from this box):** streaming ✅, tool calls ✅ (Ollama
+delivers a call whole after ~3–4 s rather than in fragments), thinking off via
+`reasoning_effort: "none"` ✅ (default spent a 400-token reply thinking, no answer).
+Ollama's default loaded qwen3.5:9b with a **131k context → 11 GB, 45% on GPU, 11
+tok/s**; at 4096 context it is 5.5 GB, 100% on GPU, **33 tok/s (~187 chars/s)**,
+first token 0.1–0.3 s warm, cold load ~4 s. So TOWER has a Modelfile tag
+**`jarvis-qwen3.5-9b`** (`FROM qwen3.5:9b` + `PARAMETER num_ctx 4096`) — it also
+pins routing in practice, since only TOWER holds it. qwen3.5:4b ran 76 tok/s but
+first word is Fish-bound either way, so 9b (better tool-caller) was chosen. The
+real `agent.run` loop (`get_time` → result → answer) worked end-to-end through PAIR.
+
+**Code landed (2026-09-10), off by default:** `pair_base_url` / `pair_model` /
+`pair_reasoning_effort` / `pair_timeout_seconds` / `pair_retry_after_seconds` in
+`config.py`; `backend.py` tries PAIR first and falls back to llama-server only when
+PAIR fails **before any output** (never mid-reply), then skips PAIR for the retry
+window; the llama-server API key is never sent to PAIR; `grammar` stays local;
+`health` passes through PAIR if llama-server is down. `tests/test_pair_backend.py`,
+237 pytest green. **To switch on:** add `"pair_base_url": "http://127.0.0.1:11434"`
+and `"pair_model": "jarvis-qwen3.5-9b"` to `config.local.json`, `.\restart_app.ps1`.
+Keep llama-server running — it is the fallback, and idle it costs VRAM, not speed.
+
+**Keep-alive (do not re-derive):** `OLLAMA_KEEP_ALIVE` on TOWER did **not** take effect
+(set + PAIR/Ollama restarted, still 5 min), and `keep_alive` on the OpenAI
+`/v1/chat/completions` endpoint is ignored through PAIR. What works: Ollama's native
+`POST /api/generate {"model", "keep_alive"}` with no prompt — 0.02 s through PAIR,
+and the expiry **sticks** across later `/v1` requests until the model unloads (it
+also loads the model if unloaded). So `backend.keep_pair_warm` sends it at app
+startup and at most once a minute from `/api/health` (the page polls every 5 s),
+with `pair_keep_alive` (default `"30m"`): warm while JARVIS is open, freed 30 min
+after. A failed keep-alive marks PAIR down so the next turn goes straight to
+llama-server. 243 pytest green.
+
+**PAIR switched on in `config.local.json` (23:10, 2026-09-10)** — verified the
+startup keep-alive reached TOWER (expiry = startup + 30 min). First-word timing on
+PAIR still to be measured on-device.
+
+**Fabricated reminders (found 23:01, 2026-09-10, still on Qwen2.5-7B):** asked for an
+alarm at 11:02, JARVIS "set" one for 11:02 AM, then "corrected" it to PM — the audit
+log and `data/timers.json` show **no tool call at all**; both confirmations were
+invented. Fixes, 261 pytest green:
+- `agent.claims_timer_action` + `_timer_tool_succeeded`: if the final answer claims a
+  timer/reminder was set/cancelled and no timer tool succeeded in the turn, a spoken
+  **"Correction: I didn't actually do that…"** is appended and an `unbacked_claim` is
+  audited. Offers, questions and negatives are ignored.
+- `timers.parse_clock_time`: a bare 1–12 hour ("11:02") is whichever AM/PM comes
+  next (it was read as 24-hour → 11:02 AM tomorrow); a time that passed within
+  `JUST_PASSED_SECONDS` (120) is refused with a message the model relays, instead of
+  silently rolling to tomorrow night. Takes an optional `now` for tests.
+
+**qwen3.5 refused alarms on PAIR (23:18, 2026-09-10) — fixed, 263 pytest green.**
+Speech started sooner on PAIR, but JARVIS answered "I cannot set alarms… unavailable in
+this alpha". Cause: `prompts/system.txt` (pre-tools) says "You currently have no
+external tools" and "You cannot create reminders, timers, alarms…"; the tool guidance
+only said "disregard that". Qwen2.5-7B obeyed the later line, qwen3.5 the earlier one.
+Fixes in `server.py`: `TOOLLESS_PROMPT_REPLACEMENTS` *replaces* those sentences when
+tools are on (a test asserts they still exist in the prompt file, so it cannot silently
+stop matching); `_drop_stale_timer_refusals` removes earlier "can't set alarms"
+exchanges from history (with two in history, qwen3.5 repeated the refusal verbatim);
+guidance now says never add AM/PM the user didn't say (it had turned "11.1" into
+"11:01 AM"); `parse_clock_time` accepts "11.20" (Whisper writes times with a dot).
+Replayed through PAIR after the fix: stuck conversation → `set_reminder("11:55")` 2/2,
+"11.50" → 11:50 PM tonight, "remind me at 11:58 to lock the door" → message kept.
+**Verified on-device 23:28–23:31:** "11:28" at 11:28:45 PM was refused by the
+just-passed guard (audited `failed`, relayed to the user); `set_reminder("11:31 PM")`
+executed and **fired at 11:31 PM**. A second alert during a long reply showed its card
+at once and held sound + speech until the reply finished. No `unbacked_claim` events.
+
+**Music test result:** 4 of 6 spoken turns ended ~1 s after speech; music-only pickups
+mostly 1–3 s and rejected. The two turns that ran 7–13 s long were when the music got
+louder mid-turn — the energy detector's limit; the durable fix is a browser-side VAD
+(backlog). Starting music *after* conversation mode is on is still untested. **Security, parked until PAIR is proven:** PAIR's
+ollama/lmstudio proxies listen on all interfaces with firewall rules open to the
+whole local subnet and no auth seen — scope them to Joseph's machines.
 
 ## Fish does not stream within a request (measured 2026-08-23)
 
