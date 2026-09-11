@@ -15,6 +15,31 @@ class Config:
     app_port: int = 8787
     llama_base_url: str = "http://127.0.0.1:8081"
     model: str = "qwen2.5-7b-instruct-q4_k_m.gguf"
+    # Optional primary model backend through NVIDIA PAIR (Personal AI Router). Its
+    # proxy is loopback (127.0.0.1:11434) and forwards each request to one LAN node
+    # running Ollama, so the model can run on another machine's GPU and leave this
+    # box's GPU to Fish — sharing it slowed both ~2.4x (measured 2026-09-10). Empty
+    # keeps llama-server as the only backend. When set, llama-server stays the
+    # fallback for any request PAIR fails before producing output (see backend.py).
+    pair_base_url: str = ""
+    pair_model: str = ""
+    # Qwen 3.5 thinks before answering by default; in the trial it spent a whole
+    # 400-token reply thinking and said nothing. "none" turns that off.
+    pair_reasoning_effort: str = "none"
+    # Per-socket-operation timeout toward PAIR: short, so an unreachable node falls
+    # back quickly, but above a warm first token and a buffered tool call (~4 s).
+    pair_timeout_seconds: int = 20
+    # After a PAIR failure, use llama-server directly for this long rather than
+    # paying the timeout on every turn while the node is off.
+    pair_retry_after_seconds: int = 60
+    # How long the PAIR node keeps the model loaded after JARVIS last asked. Ollama
+    # unloads after 5 minutes by default (a ~4-19 s reload on the next turn), and
+    # both OLLAMA_KEEP_ALIVE on the node and keep_alive on the OpenAI endpoint were
+    # ignored in the trial. Ollama's native keep-alive call does stick, so JARVIS
+    # sends it at startup and at most once a minute while a page is polling health:
+    # warm while JARVIS is open, freed this long after it closes. "" disables it;
+    # "-1" never unloads.
+    pair_keep_alive: str = "30m"
     stt_enabled: bool = True
     whisper_binary: str = "runtime/whisper.cpp/build/bin/whisper-cli"
     whisper_model: str = "models/whisper/ggml-base.en.bin"
@@ -148,6 +173,24 @@ class Config:
             raise ValueError("llama_base_url must be an HTTP URL")
         if not ipaddress.ip_address(backend.hostname).is_loopback:
             raise ValueError("llama_base_url must use a loopback IP address")
+        if self.pair_base_url:
+            # PAIR itself reaches the LAN (over its own mTLS); JARVIS only ever talks
+            # to the local proxy, so the loopback rule holds here too.
+            pair = urlparse(self.pair_base_url)
+            if pair.scheme != "http" or not pair.hostname:
+                raise ValueError("pair_base_url must be an HTTP URL")
+            if not ipaddress.ip_address(pair.hostname).is_loopback:
+                raise ValueError("pair_base_url must use a loopback IP address")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", self.pair_model):
+                raise ValueError("pair_model must name a model when pair_base_url is set")
+        if self.pair_reasoning_effort not in ("", "none", "low", "medium", "high"):
+            raise ValueError("pair_reasoning_effort must be empty, none, low, medium or high")
+        if not 3 <= self.pair_timeout_seconds <= 120:
+            raise ValueError("pair_timeout_seconds must be between 3 and 120")
+        if not 0 <= self.pair_retry_after_seconds <= 3600:
+            raise ValueError("pair_retry_after_seconds must be between 0 and 3600")
+        if not re.fullmatch(r"|-1|\d{1,6}|\d{1,4}[smh]", self.pair_keep_alive):
+            raise ValueError("pair_keep_alive must be empty, -1, seconds, or a duration like 30m")
         if not 1024 <= self.app_port <= 65535:
             raise ValueError("app_port must be between 1024 and 65535")
         if not 1 <= self.max_history_messages <= 100:
