@@ -81,15 +81,25 @@ def _spoken(epoch: float) -> str:
     return f"{local.strftime('%A, %B')} {day} at {_clock_12h(local)}"
 
 
-_CLOCK_RE = re.compile(r"^\s*(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?\s*$", re.IGNORECASE)
+# A dot separator too: the speech recognizer writes a spoken "eleven twenty" as "11.20".
+_CLOCK_RE = re.compile(r"^\s*(\d{1,2})(?:[:.](\d{2}))?\s*([ap]\.?m\.?)?\s*$", re.IGNORECASE)
 
 
-def parse_clock_time(value: object) -> float:
-    """Resolve a clock time ('10:42 PM', '22:42', '6:30am', '6 pm') to a UTC epoch.
+# A time said a moment ago is almost never meant for tomorrow: on-device
+# (2026-09-10) "11:02 PM" at 11:02:44 PM was a correction of an earlier request,
+# and rolling it a day ahead would have set it for the next night without anyone
+# noticing. Inside this window it is refused with a message the model can relay.
+JUST_PASSED_SECONDS = 120
+
+
+def parse_clock_time(value: object, now: datetime | None = None) -> float:
+    """Resolve a clock time ('10:42 PM', '22:42', '6:30am', '6 pm', '11:02') to a UTC epoch.
 
     Picks the next occurrence: today if the time is still ahead, otherwise
     tomorrow. This lets the model pass the time the user said verbatim, with no
-    date arithmetic and no get_time round trip.
+    date arithmetic and no get_time round trip. A bare 1-12 hour with no am/pm is
+    whichever of the two comes first — said at 11:01 PM, "11:02" is a minute away,
+    not 11:02 tomorrow morning.
     """
     if not isinstance(value, str) or not value.strip():
         raise TimerValidationError("at_time must be a clock time string")
@@ -109,13 +119,27 @@ def parse_clock_time(value: object) -> float:
             hour += 12
         elif meridiem == "a" and hour == 12:
             hour = 0
+        hours = [hour]
     elif hour > 23:
         raise TimerValidationError("at_time hour must be 0-23")
-    now = datetime.now().astimezone()
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    return target.timestamp()
+    elif 1 <= hour <= 12:
+        hours = [hour % 12, hour % 12 + 12]
+    else:
+        hours = [hour]
+    now = (now or datetime.now()).astimezone()
+    candidates = []
+    for candidate_hour in hours:
+        target = now.replace(hour=candidate_hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            if (now - target).total_seconds() <= JUST_PASSED_SECONDS:
+                raise TimerValidationError(
+                    f"{_clock_12h(target)} has just passed (it is {_clock_12h(now)} now). "
+                    "Ask the user whether they meant tomorrow; for something in the next "
+                    "few minutes, use duration_seconds instead."
+                )
+            target += timedelta(days=1)
+        candidates.append(target)
+    return min(candidates).timestamp()
 
 
 def parse_fire_at(value: object) -> float:

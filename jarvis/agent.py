@@ -29,6 +29,7 @@ renders and which older parsers safely ignore.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import uuid
@@ -150,6 +151,67 @@ def _run_handler(tool, arguments: dict, config: Config) -> object:
 
 
 # --------------------------------------------------------------------------- #
+# Unbacked claims
+# --------------------------------------------------------------------------- #
+#
+# A small model sometimes *says* it set a timer without calling the tool. On
+# 2026-09-10 Qwen2.5-7B confirmed two reminders in a row and the audit log showed
+# no call at all, so nothing fired. The prompt and a low temperature make that
+# rarer, not impossible, and the user cannot tell a real confirmation from a
+# made-up one. So when a final answer claims a timer or reminder action and no
+# timer tool succeeded in the turn, a correction follows it — shown and spoken —
+# and the claim is audited.
+
+_TIMER_TOOLS = frozenset({"set_timer", "set_reminder", "cancel_timer", "list_timers"})
+_THING = r"(?:timer|reminder|alarm|countdown)s?"
+_DONE_VERB = r"(?:set|scheduled|created|started|added|cancell?ed|removed|deleted)"
+_CLAIM_PATTERNS = (
+    # "I've set a reminder", "I have scheduled your alarm", "I set a 5 minute timer"
+    re.compile(rf"\bi(?:'ve| have)?\s+(?:just\s+|now\s+|already\s+|(?:gone|went) ahead and\s+)?"
+               rf"{_DONE_VERB}\b[^.!?\n]{{0,40}}\b{_THING}\b", re.IGNORECASE),
+    # "Your reminder is set for 11:02", "the timer has been started"
+    re.compile(rf"\b{_THING}\b[^.!?\n]{{0,40}}\b(?:is|are|was|were|has been|have been)\s+"
+               rf"(?:now\s+|all\s+)?{_DONE_VERB}\b", re.IGNORECASE),
+    # "I'll remind you at 11:02"
+    re.compile(r"\bi(?:'ll| will)\s+remind you\b", re.IGNORECASE),
+)
+_NEGATION = re.compile(r"\b(?:no|not|never|cannot|unable)\b|n't\b", re.IGNORECASE)
+_CORRECTION = (
+    "\n\nCorrection: I didn't actually do that — no timer or reminder was set or changed. "
+    "Please ask me again."
+)
+
+
+def claims_timer_action(text: str) -> bool:
+    """Whether an answer claims to have set, scheduled or cancelled a timer or reminder."""
+    for sentence in re.split(r"(?<=[.!?\n])\s*", text.replace("’", "'")):
+        sentence = sentence.strip()
+        # Offers ("shall I set a timer?") and negatives ("no timer is set") claim nothing.
+        if not sentence or sentence.endswith("?") or _NEGATION.search(sentence):
+            continue
+        if any(pattern.search(sentence) for pattern in _CLAIM_PATTERNS):
+            return True
+    return False
+
+
+def _timer_tool_succeeded(messages: list[dict]) -> bool:
+    names = {}
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            names[call.get("id")] = (call.get("function") or {}).get("name")
+    for message in messages:
+        if message.get("role") != "tool" or names.get(message.get("tool_call_id")) not in _TIMER_TOOLS:
+            continue
+        try:
+            payload = json.loads(message.get("content") or "")
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and "error" not in payload and not payload.get("declined"):
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------- #
 # The loop
 # --------------------------------------------------------------------------- #
 
@@ -222,12 +284,14 @@ def _drive(config: Config, registry: ToolRegistry, messages: list[dict],
         yield _DONE
         return
     collected: list[dict] = []
+    answer: list[str] = []
     grammar = registry.grammar() if config.tool_grammar_enabled else None
     try:
         for event in backend.stream_chat_tools(config, messages, registry.openai_payload(),
                                                 grammar=grammar):
             kind = event["type"]
             if kind == "content" and event["text"]:
+                answer.append(event["text"])
                 yield _content_event(event["text"])
             elif kind == "tool_call":
                 collected.append(event)
@@ -237,6 +301,10 @@ def _drive(config: Config, registry: ToolRegistry, messages: list[dict],
         yield _DONE
         return
     if not collected:
+        text = "".join(answer)
+        if claims_timer_action(text) and not _timer_tool_succeeded(messages):
+            tools_module.audit(config, "unbacked_claim", outcome=text[:300])
+            yield _content_event(_CORRECTION)
         yield _DONE
         return
     for call in collected:

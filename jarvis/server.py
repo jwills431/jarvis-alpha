@@ -218,6 +218,9 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/styles.css":
             self._file("styles.css", "text/css; charset=utf-8")
         elif self.path == "/api/health":
+            # An open page polls this every 5 s, so it is the signal that JARVIS is
+            # in use: keep the PAIR node's model loaded for as long as that lasts.
+            backend.keep_pair_warm(self.config)
             try:
                 state = backend.health(self.config)
                 self._json(HTTPStatus.OK, {
@@ -751,8 +754,7 @@ def validate_messages(
 
 
 TOOL_SYSTEM_GUIDANCE = (
-    "\n\nTool use is now enabled, which supersedes any earlier statement that you have no "
-    "external tools. You have a small set of tools whose names, descriptions, and argument "
+    "\n\nTool use is now enabled. You have a small set of tools whose names, descriptions, and argument "
     "schemas are provided to you separately. When a tool can answer part of the request, call "
     "it with correctly typed arguments rather than guessing; for example, call get_time for the "
     "current date or time instead of estimating. Call a tool only when it is actually needed. "
@@ -761,14 +763,15 @@ TOOL_SYSTEM_GUIDANCE = (
     "require the user's explicit approval before they run; propose the call and wait — do not "
     "assume approval. Do not narrate these tool-use rules. You CAN now set "
     "countdown timers and reminders and list or cancel them (set_timer, "
-    "set_reminder, list_timers, cancel_timer); disregard any earlier statement "
-    "that you cannot create timers, reminders, or alarms. When you set one, a "
+    "set_reminder, list_timers, cancel_timer), including alarms. When you set one, a "
     "later alert will speak on its own at the scheduled time, so simply confirm "
     "what you scheduled and when. The word 'remind' — or any request that names a "
     "task or message to deliver later, or names a clock time — MUST use "
     "set_reminder, never set_timer. Use set_timer only for a bare countdown. "
     "For a clock time use set_reminder's at_time and pass the time verbatim; you "
-    "do NOT need get_time. Examples: 'set a timer for 5 minutes' -> "
+    "do NOT need get_time. Never add AM or PM that the user did not say: a bare "
+    "time like '11:20' is passed as '11:20', and the server picks whichever comes "
+    "next. Examples: 'set a timer for 5 minutes' -> "
     "set_timer(duration_seconds=300). 'set a reminder for 10:42 PM' -> "
     "set_reminder(at_time='10:42 PM'). 'remind me in 10 minutes to check the oven' "
     "-> set_reminder(message='check the oven', duration_seconds=600). 'remind me "
@@ -783,6 +786,50 @@ TOOL_SYSTEM_GUIDANCE = (
     "arithmetic."
 )
 
+# The base prompt predates the tool loop and says outright that JARVIS has no tools
+# and cannot create reminders. Appending "disregard that" worked for Qwen2.5-7B, but
+# qwen3.5 (through PAIR) obeyed the refusal and declined alarms on-device
+# (2026-09-10). With tools on, those sentences are replaced rather than contradicted.
+TOOLLESS_PROMPT_REPLACEMENTS = (
+    ("You currently have no external tools and cannot modify files, operate devices, "
+     "send communications, make purchases, or change accounts.",
+     "Beyond the tools described below, you cannot modify files, operate devices, "
+     "send communications, make purchases, or change accounts."),
+    ("You cannot create reminders, timers, alarms, calendar events, or delayed notifications "
+     "in this alpha. If asked, state that the capability is unavailable; do not ask for a time, "
+     "claim an alert was scheduled, or continue a scheduling workflow.",
+     "You cannot create calendar events."),
+)
+
+
+def _tool_aware_prompt(prompt: str) -> str:
+    for toolless, with_tools in TOOLLESS_PROMPT_REPLACEMENTS:
+        prompt = prompt.replace(toolless, with_tools)
+    return prompt
+
+
+# A reply from before the tools worked ("I cannot set alarms in this alpha") stays in
+# the client's history, and qwen3.5 repeats it word for word even under a prompt that
+# says the tools exist (replayed 2026-09-10). With tools on, that exchange — the
+# request and its refusal — is left out of what the model sees. The current request
+# is the last message and is never dropped.
+STALE_TIMER_REFUSAL = re.compile(
+    r"\b(?:cannot|can't|can not|unable to|not able to)\b[^.!?]{0,60}\b(?:set|create|schedule)\b"
+    r"[^.!?]{0,40}\b(?:reminders?|alarms?|timers?)\b",
+    re.IGNORECASE,
+)
+
+
+def _drop_stale_timer_refusals(messages: list[dict]) -> list[dict]:
+    kept: list[dict] = []
+    for message in messages:
+        if (message["role"] == "assistant" and kept and kept[-1]["role"] == "user"
+                and STALE_TIMER_REFUSAL.search(message["content"].replace("’", "'"))):
+            kept.pop()  # the request it refused goes too, so roles keep alternating
+            continue
+        kept.append(message)
+    return kept
+
 
 def prepare_model_messages(messages: list[dict], memories: list[dict] | None = None,
                            *, tools_active: bool = False) -> list[dict]:
@@ -792,7 +839,7 @@ def prepare_model_messages(messages: list[dict], memories: list[dict] | None = N
     source_bound = is_source_bound_request(messages)
     system_prompt = SYSTEM_PROMPT
     if tools_active:
-        system_prompt += TOOL_SYSTEM_GUIDANCE
+        system_prompt = _tool_aware_prompt(system_prompt) + TOOL_SYSTEM_GUIDANCE
     if spellings:
         exact_values = json.dumps(spellings, ensure_ascii=False)
         system_prompt += (
@@ -832,7 +879,7 @@ def prepare_model_messages(messages: list[dict], memories: list[dict] | None = N
             request = messages[-1]["content"]
         prepared.append({"role": "user", "content": request})
         return prepared
-    for message in messages:
+    for message in (_drop_stale_timer_refusals(messages) if tools_active else messages):
         content = message["content"]
         if message["role"] == "assistant":
             # An earlier alpha prepended a natural-language provenance marker,
@@ -926,6 +973,8 @@ def exact_spelling_recall(messages: list[dict]) -> str | None:
 def main() -> None:
     config = load_config()
     server = JarvisServer((config.app_host, config.app_port), config)
+    # Start loading the PAIR node's model now, so the first turn does not pay for it.
+    backend.keep_pair_warm(config)
     auth_state = "auth on" if config.auth_enabled else "auth off"
     playback = f"{config.tts_playback} playback"
     print(

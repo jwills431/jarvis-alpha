@@ -156,6 +156,66 @@ MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "w
 
 
 # --------------------------------------------------------------------------- #
+# Unbacked claims: "I set it" with no tool call behind it
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("text", [
+    "I've set a reminder for 11:02 AM.",
+    "Done! I have scheduled your alarm for 7 AM.",
+    "Your reminder is set for 11:02 PM.",
+    "The timer has been started.",
+    "I set a 5 minute timer for you.",
+    "Sure. I’ll remind you at 11:02 PM.",
+    "I've cancelled your tea timer.",
+])
+def test_detects_claims_of_timer_actions(text):
+    assert agent.claims_timer_action(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Would you like me to set a timer?",
+    "I can set a timer or a reminder for you.",
+    "You don't have any timers set.",
+    "No reminder is set right now.",
+    "I couldn't set that reminder because the time has just passed.",
+    "It's Thursday, September 10th, 2026 at 11:02 PM.",
+])
+def test_ignores_offers_questions_and_negatives(text):
+    assert not agent.claims_timer_action(text)
+
+
+def test_unbacked_timer_claim_is_corrected_and_audited(tmp_path, monkeypatch):
+    config = make_config(tmp_path, timers_path=str(tmp_path / "timers.json"))
+    script_backend(monkeypatch, [[content("Your reminder is set for 11:02 AM."), done()]])
+    text, _, terminated = collect(agent.run(config, default_registry(), MESSAGES, agent.PendingActions()))
+    assert text.startswith("Your reminder is set for 11:02 AM.")
+    assert "Correction: I didn't actually do that" in text
+    assert terminated
+    assert [record["event"] for record in read_audit(config)] == ["unbacked_claim"]
+
+
+def test_backed_timer_claim_is_left_alone(tmp_path, monkeypatch):
+    config = make_config(tmp_path, timers_path=str(tmp_path / "timers.json"))
+    script_backend(monkeypatch, [
+        [tool_call("set_timer", {"duration_seconds": 60}), done("tool_calls")],
+        [content("I've set a one minute timer."), done()],
+    ])
+    text, _, _ = collect(agent.run(config, default_registry(), MESSAGES, agent.PendingActions()))
+    assert text == "I've set a one minute timer."
+    assert "unbacked_claim" not in [record["event"] for record in read_audit(config)]
+
+
+def test_failed_timer_call_does_not_back_a_claim(tmp_path, monkeypatch):
+    config = make_config(tmp_path, timers_path=str(tmp_path / "timers.json"))
+    script_backend(monkeypatch, [
+        [tool_call("set_reminder", {"at_time": "not a time"}), done("tool_calls")],
+        [content("I've set your reminder."), done()],
+    ])
+    text, _, _ = collect(agent.run(config, default_registry(), MESSAGES, agent.PendingActions()))
+    assert "Correction: I didn't actually do that" in text
+
+
+# --------------------------------------------------------------------------- #
 # Read-only tool: the happy path
 # --------------------------------------------------------------------------- #
 

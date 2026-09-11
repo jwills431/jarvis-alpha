@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from jarvis.config import Config, load_config
 from jarvis.backend import BackendError, count_unsupported_script_characters, sanitize_sse_line, stream_chat
-from jarvis.server import SYSTEM_PROMPT, Handler, JarvisServer, check_basic_auth, static_route, exact_spelling_recall, extract_authoritative_spellings, is_source_bound_request, prepare_model_messages, validate_messages, verify_password
+from jarvis.server import SYSTEM_PROMPT, TOOLLESS_PROMPT_REPLACEMENTS, Handler, JarvisServer, check_basic_auth, static_route, exact_spelling_recall, extract_authoritative_spellings, is_source_bound_request, prepare_model_messages, validate_messages, verify_password
 from jarvis import speech
 from jarvis.speech import (
     SpeechError,
@@ -140,10 +140,40 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Config(max_timer_seconds=10).validate()
 
-    def test_tool_guidance_overrides_the_timer_refusal(self):
-        withtools = prepare_model_messages([{"role": "user", "content": "hi"}], tools_active=True)
-        self.assertIn("set_timer", withtools[0]["content"])
-        self.assertIn("disregard any earlier statement", withtools[0]["content"])
+    def test_tool_prompt_drops_the_toolless_refusals_instead_of_contradicting_them(self):
+        # qwen3.5 obeyed "you cannot create reminders" over a later "disregard that"
+        # and refused alarms on-device, so with tools on the refusal must be gone.
+        base = prepare_model_messages([{"role": "user", "content": "hi"}])[0]["content"]
+        withtools = prepare_model_messages([{"role": "user", "content": "hi"}], tools_active=True)[0]["content"]
+        for toolless, _ in TOOLLESS_PROMPT_REPLACEMENTS:
+            # Still in the prompt file, so the replacement cannot silently stop matching.
+            self.assertIn(toolless, base)
+            self.assertNotIn(toolless, withtools)
+        self.assertNotIn("cannot create reminders", withtools)
+        self.assertNotIn("no external tools", withtools)
+        self.assertIn("set_timer", withtools)
+        self.assertIn("Never add AM or PM", withtools)
+
+    def test_tool_turns_drop_stale_timer_refusals_from_history(self):
+        # Replayed on-device: with two refusals in history, qwen3.5 repeated the refusal.
+        refusal = ("I'm sorry, but I cannot set reminders or alarms at this time as that "
+                   "capability is currently unavailable in this alpha version.")
+        history = [
+            {"role": "user", "content": "set an alarm for 11.1."},
+            {"role": "assistant", "content": refusal},
+            {"role": "user", "content": "What is a jet engine?"},
+            {"role": "assistant", "content": "A jet engine is a turbine that makes thrust."},
+            {"role": "user", "content": "Set an alarm for 11.55."},
+        ]
+        withtools = prepare_model_messages(history, tools_active=True)
+        self.assertEqual(
+            [(message["role"], message["content"]) for message in withtools[1:]],
+            [("user", "What is a jet engine?"),
+             ("assistant", "A jet engine is a turbine that makes thrust."),
+             ("user", "Set an alarm for 11.55.")],
+        )
+        # Without tools the refusal is true, so the history is left as it was.
+        self.assertIn(refusal, [message["content"] for message in prepare_model_messages(history)])
 
     def test_prepare_model_messages_injects_tool_guidance_only_when_active(self):
         base = prepare_model_messages([{"role": "user", "content": "hi"}])

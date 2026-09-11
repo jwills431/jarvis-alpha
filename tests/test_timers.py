@@ -141,15 +141,52 @@ def test_bad_duration_types_rejected(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def test_parse_clock_time_variants():
-    import time
-    now = time.time()
-    for value in ("10:42 PM", "22:42", "6:30am", "6 pm", "12:00 AM", "12 pm"):
-        epoch = parse_clock_time(value)
+    # A fixed afternoon, so no value lands inside the just-passed window by chance.
+    afternoon = datetime(2026, 9, 10, 15, 0).astimezone()
+    now = afternoon.timestamp()
+    for value in ("10:42 PM", "22:42", "6:30am", "6 pm", "12:00 AM", "12 pm", "11:02"):
+        epoch = parse_clock_time(value, now=afternoon)
         assert isinstance(epoch, float)
         assert now < epoch <= now + 24 * 3600 + 5  # always the next occurrence, within a day
     for bad in (None, "", "not a time", "25:00", "10:99 PM", "13 pm"):
         with pytest.raises(TimerValidationError):
-            parse_clock_time(bad)
+            parse_clock_time(bad, now=afternoon)
+
+
+def test_bare_twelve_hour_time_means_the_next_one():
+    # Said at 11:01 PM, "11:02" is a minute away — not 11:02 tomorrow morning
+    # (on-device 2026-09-10 the model heard AM when a minute from now was meant).
+    night = datetime(2026, 9, 10, 23, 1).astimezone()
+    assert parse_clock_time("11:02", now=night) == pytest.approx((night + timedelta(minutes=1)).timestamp())
+    morning = datetime(2026, 9, 10, 9, 0).astimezone()
+    assert parse_clock_time("3:30", now=morning) == pytest.approx(morning.replace(hour=15, minute=30).timestamp())
+    # "12:15" at 9 AM is quarter past noon, not quarter past midnight tomorrow.
+    assert parse_clock_time("12:15", now=morning) == pytest.approx(morning.replace(hour=12, minute=15).timestamp())
+    # A 24-hour value is unambiguous and stays exactly as said.
+    assert parse_clock_time("13:15", now=morning) == pytest.approx(morning.replace(hour=13, minute=15).timestamp())
+    assert parse_clock_time("0:30", now=morning) == pytest.approx(
+        (morning.replace(hour=0, minute=30) + timedelta(days=1)).timestamp())
+
+
+def test_dotted_time_from_the_recognizer_is_a_clock_time():
+    # Whisper transcribed a spoken "eleven twenty" as "11.20" on-device.
+    night = datetime(2026, 9, 10, 23, 1).astimezone()
+    assert parse_clock_time("11.20", now=night) == pytest.approx(night.replace(minute=20).timestamp())
+    assert parse_clock_time("6.30 p.m.", now=night) == pytest.approx(
+        (night.replace(hour=18, minute=30) + timedelta(days=1)).timestamp())
+    with pytest.raises(TimerValidationError):
+        parse_clock_time("11.1", now=night)  # one minute digit is ambiguous: refuse, let the model ask
+
+
+def test_a_time_that_just_passed_is_refused_not_moved_to_tomorrow():
+    now = datetime(2026, 9, 10, 23, 2, 44).astimezone()
+    for value in ("11:02 PM", "11:02", "23:02"):
+        with pytest.raises(TimerValidationError, match="just passed"):
+            parse_clock_time(value, now=now)
+    # Longer ago than the window: the next occurrence, tomorrow, as before.
+    later = now + timedelta(minutes=10)
+    assert parse_clock_time("11:02 PM", now=later) == pytest.approx(
+        (now.replace(hour=23, minute=2, second=0) + timedelta(days=1)).timestamp())
 
 
 def test_parse_fire_at_variants():
