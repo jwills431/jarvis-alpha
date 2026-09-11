@@ -151,8 +151,8 @@ Stack brought up with `.\start_jarvis.ps1 -Tools` and tested over RDP. Results:
   110–150-char sentence, so first word came 6–9 s in. Fixed: `SPEECH_FIRST_MAX_CHARS`
   (80) — the first chunk breaks at a clause past 80 chars. Later chunks unchanged.
   On one GPU a very long reply may still pause briefly after the first phrase.
-- **All three fixes are green in the suite (222 pytest + node) but need re-testing
-  on-device.** Tests 2, 3, 5, 6 of the `docs/BACKLOG.md` pass were not yet run.
+- **All three fixes re-tested on-device the same night**, and tests 2, 3, 5, 6 of the
+  `docs/BACKLOG.md` pass all passed — results recorded there.
 
 **PAIR is now being trialled to remove the GPU sharing** (see `docs/BACKLOG.md`).
 Joseph's PAIR cluster: GUITECH-CORE (this box, 3060), GUITECH-TOWER (192.168.7.85,
@@ -235,7 +235,24 @@ at once and held sound + speech until the reply finished. No `unbacked_claim` ev
 **Music test result:** 4 of 6 spoken turns ended ~1 s after speech; music-only pickups
 mostly 1–3 s and rejected. The two turns that ran 7–13 s long were when the music got
 louder mid-turn — the energy detector's limit; the durable fix is a browser-side VAD
-(backlog). Starting music *after* conversation mode is on is still untested. **Security, parked until PAIR is proven:** PAIR's
+(backlog). Music started *after* conversation mode is on still interferes: one 19 s
+clip with 0.3 s of speech became a "you" turn. A lone "you" is now rejected as a
+canned non-speech transcript; the detector problem behind it remains.
+
+## Next session — parked 2026-09-10, in this order
+
+1. **Scope PAIR's firewall rules to Joseph's machines.** PAIR's ollama-proxy (11434)
+   and lmstudio-proxy (1234) listen on all interfaces, with rules open to the whole
+   local subnet on every profile and no auth; `nvpair-ui-broker` is allowed from Any on
+   Public. Do it on each node (CORE, TOWER, and MOBILE if it stays in), the way
+   `jarvis_firewall_rule.ps1` scopes JARVIS. A security change — Joseph applies it.
+2. **Browser-side VAD for conversation mode** (Silero via onnxruntime-web, vendored,
+   CSP review) — the durable fix for music/TV holding turns open. Its own session.
+3. **Lower `SPEECH_FIRST_MAX_CHARS` 80 → ~50** now that Fish has the GPU (PAIR): about
+   0.5 s off first word, at the cost of more clause breaks. Re-measure from the logs.
+4. Still parked from before: server-side custom alert sounds; Stage 2 (reading the web).
+   `AGENTS.md` is an untracked Codex copy of this file with wrong `D:\Codex Projects`
+   paths — delete it or fix it before ever committing it. **Security, parked until PAIR is proven:** PAIR's
 ollama/lmstudio proxies listen on all interfaces with firewall rules open to the
 whole local subnet and no auth seen — scope them to Joseph's machines.
 
