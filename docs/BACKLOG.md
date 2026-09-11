@@ -92,3 +92,48 @@ Hard-refresh the browser; assets are at `v=16`.
    times, cancel one, confirm it goes and does not fire, and check the
    `timer_cancelled` line in `data/tool_audit.jsonl`.
 6. **Phone.** Confirm the Timers control is absent and nothing else regressed.
+
+---
+
+## Later — evaluated, deliberately parked
+
+### NVIDIA PAIR (Personal AI Router) — added 2026-09-10
+
+**What it is:** NVIDIA's free, open-source (Apache-2.0) beta, released 2026-09-03.
+It pairs machines on the LAN (mDNS discovery, PIN pairing, mTLS between nodes) and
+exposes one local OpenAI/Ollama-compatible endpoint (default `127.0.0.1:11434`),
+routing each request to **one** node running **Ollama or LM Studio**. It does not
+pool VRAM, shard a model, or split a request. Hardware: RTX 20-series+, DGX Spark,
+Apple M4+ (the old Intel iMac Pro does not qualify).
+Repo: https://github.com/NVIDIA/Personal-AI-Router
+
+**Why parked:** it only pays off when several *independent* requests run at once.
+JARVIS makes one sequential LLM call per turn, on one GPU box. PAIR routes only the
+LLM — not Fish or whisper — and adds a proxy hop plus the risk of landing on a slow
+or cold node, which works against the ~1.2 s first-word budget.
+
+**Revisit when either is true:**
+- JARVIS gains **concurrent** LLM work — Stage 2+ fetching/summarising several
+  pages at once, or subagents.
+- The 3060's 12 GB gets **tight** (a bigger tool-tuned model + Fish) and a second
+  supported GPU box is available to take the LLM. Note PAIR picks nodes itself, so
+  pinning the model to one box means only loading it there — a direct URL may be
+  simpler for that case.
+
+**Integration touchpoints (estimated: ~½ day code, 1–2 sessions ops + re-verify):**
+- `llama_base_url` → the PAIR endpoint. Still loopback, so the check in
+  `config.py` passes; confirm WSL (mirrored networking) reaches a Windows-side PAIR
+  at `127.0.0.1`, or install the Linux `.deb` inside WSL.
+- `backend.health` probes llama-server's `/health`; Ollama has no such route.
+- `config.model` must match an Ollama model tag (llama-server ignores it).
+- The `grammar` field in `stream_chat_tools` is not honoured by Ollama — off by
+  default, but the GBNF fallback is lost.
+- Replace llama-server with Ollama: import the Qwen GGUF via a Modelfile, rework
+  `start_jarvis.ps1` / `stop_jarvis.ps1` and the `-Tools` / `--jinja` path.
+- **Re-verify Stage 0/1 on-device** — tool-call reliability was tuned against
+  llama.cpp `--jinja`; Ollama's Qwen chat template differs. PAIR's docs don't say
+  whether tool calls and streaming pass through the proxy — test that first.
+- Re-measure the voice-latency budget.
+
+**Cheap first experiment:** install PAIR and point a scratch config at it, leaving
+the working llama-server setup untouched.

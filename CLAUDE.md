@@ -202,7 +202,8 @@ written before the first word is spoken — that is expected, not a fault.
 ## Doc map
 
 - `docs/BACKLOG.md` — to-review/refine items (noise-gate false triggers, alert
-  queuing during speech, desktop timers panel, default conversation mode).
+  queuing during speech, desktop timers panel, default conversation mode), plus
+  parked ideas evaluated for later (NVIDIA PAIR inference router).
 - `docs/CAPABILITIES_PLAN.md` — staged plan for giving JARVIS the ability to act.
 - `docs/STAGE0_TOOL_LOOP.md` — Stage 0 tool-loop design + on-device checklist.
 - `docs/STAGE1_TIMERS.md` — Stage 1 timers/reminders design + on-device checklist.
